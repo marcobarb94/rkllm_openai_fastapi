@@ -1,11 +1,7 @@
 import ctypes
 import sys
-import os
-import subprocess
-import resource
 import threading
 import time
-import argparse
 import json
 from flask import Flask, request, jsonify, Response, stream_with_context
 import tiktoken
@@ -274,43 +270,4 @@ def chat_completions():
         lock.release()
         is_blocking = False
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--target_platform', help='Целевая платформа: например, rk3588/rk3576;')
-    parser.add_argument('--rkllm_model_path', help='Абсолютный путь к конвертированной модели rkllm на Linux-устройстве')
-    args = parser.parse_args()
 
-    if not (args.target_platform in ["rk3588", "rk3576"]):
-        print("====== Ошибка: Пожалуйста, укажите правильную целевую платформу: rk3588/rk3576 ======")
-        sys.stdout.flush()
-        exit()
-
-    if not os.path.exists(args.rkllm_model_path):
-        print("====== Ошибка: Пожалуйста, укажите точный путь к модели rkllm, учтите, что это должен быть абсолютный путь на устройстве ======")
-        sys.stdout.flush()
-        exit()
-
-    # Настройка фиксированной частоты
-    command = "sudo bash fix_freq_{}.sh".format(args.target_platform)
-    subprocess.run(command, shell=True)
-
-    # Установка ограничения на количество файловых дескрипторов
-    resource.setrlimit(resource.RLIMIT_NOFILE, (102400, 102400))
-
-    # Инициализация модели RKLLM
-    print("=========инициализация....===========")
-    sys.stdout.flush()
-    target_platform = args.target_platform
-    model_path = args.rkllm_model_path
-    rkllm_model = RKLLM(model_path, target_platform)
-    print("Инициализация RKLLM успешно завершена!")
-    print("==============================")
-    sys.stdout.flush()
-
-    # Запуск приложения Flask
-    app.run(host='0.0.0.0', port=8080, threaded=True, debug=False)
-
-    print("====================")
-    print("Вывод модели RKLLM завершен, освобождение ресурсов модели RKLLM...")
-    rkllm_model.release()
-    print("====================")
