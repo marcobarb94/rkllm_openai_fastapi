@@ -13,6 +13,26 @@ from core.entities_llm import *
 
 # Set the dynamic library path
 rkllm_lib = ctypes.CDLL('../libs/librkllmrt.so')
+# nm -D rkllm_server/lib/librkllmrt.so
+"""
+00000000000b8f80 T rkllm_abort
+00000000000b9640 T rkllm_accuracy_analysis
+00000000000b8fa0 T rkllm_clear_kv_cache
+00000000000b8fc0 T rkllm_createDefaultParam
+00000000000b8f20 T rkllm_destroy
+00000000000b8e40 T rkllm_init
+00000000000b8f90 T rkllm_is_running
+00000000000b8ef0 T rkllm_load_lora
+00000000000b8f00 T rkllm_load_prompt_cache
+00000000001394e0 T rkllm_print_memorys
+00000000001392d0 T rkllm_print_timings
+00000000000b8f10 T rkllm_release_prompt_cache
+00000000000b8f60 T rkllm_run
+00000000000b8f70 T rkllm_run_async
+00000000000b8fb0 T rkllm_set_chat_template
+"""
+# nm -D rkllm_server/lib/librkllmrt.so | c++filt
+# https://github.com/airockchip/rknn-llm/blob/main/rkllm-runtime/Linux/librkllm_api/include/rkllm.h
 
 # Define the structures from the library
 RKLLM_Handle_t = ctypes.c_void_p
