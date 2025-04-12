@@ -1,111 +1,153 @@
 import ctypes
-
-from app.core.entities_llm import LLMParams, RKLLMResult
-
+import sys
+import os
+import subprocess
+import resource
+import threading
+import time
+import argparse
+import json
 from typing import Optional
 
-from app.core.rkllmserver import callback
+from core.entities_llm import *
 
-# Define
-# Define types for better readability and type checking
+# Set the dynamic library path
+rkllm_lib = ctypes.CDLL('../libs/librkllmrt.so')
+
+# Define the structures from the library
 RKLLM_Handle_t = ctypes.c_void_p
 userdata = ctypes.c_void_p(None)
 
-# Load the shared library
-rkllm_lib = ctypes.CDLL('lib/librkllmrt.so')
+# Create a lock to control multi-user access to the server.
+lock = threading.Lock()
+
+# Create a global variable to indicate whether the server is currently in a blocked state.
+is_blocking = False
+
+# Define global variables to store the callback function output for displaying in the Gradio interface
+global_text = ''
+global_state = -1
+split_byte_data = bytes(b"") # Used to store the segmented byte data
+
+# Define the callback function
+def callback_impl(result, userdata, state):
+    global global_text, global_state, split_byte_data
+    if state == LLMCallState.RKLLM_RUN_FINISH:
+        global_state = state
+        print("\n")
+        sys.stdout.flush()
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        global_state = state
+        print("run error")
+        sys.stdout.flush()
+    elif state == LLMCallState.RKLLM_RUN_NORMAL:
+        global_state = state
+        global_text += result.contents.text.decode('utf-8')
+    
+
+# Connect the callback function between the Python side and the C++ side
+callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult), ctypes.c_void_p, ctypes.c_int)
+callback = callback_type(callback_impl)
 
 DEFAULT_PROMPT_TEXT_PREFIX = "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
 DEFAULT_PROMPT_TEXT_POSTFIX = "<|im_end|><|im_start|>assistant"
 
 
-class RKNNllmParam(ctypes.Structure):
-    _fields_ = [("model_path", ctypes.c_char_p),
-                ("num_npu_core", ctypes.c_int32),
-                ("max_context_len", ctypes.c_int32),
-                ("max_new_tokens", ctypes.c_int32), ("top_k", ctypes.c_int32),
-                ("top_p", ctypes.c_float), ("temperature", ctypes.c_float),
-                ("repeat_penalty", ctypes.c_float),
-                ("frequency_penalty", ctypes.c_float),
-                ("presence_penalty", ctypes.c_float),
-                ("mirostat", ctypes.c_int32), ("mirostat_tau", ctypes.c_float),
-                ("mirostat_eta", ctypes.c_float), ("logprobs", ctypes.c_bool),
-                ("top_logprobs", ctypes.c_int32), ("use_gpu", ctypes.c_bool)]
-
-
-callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult),
-                                 ctypes.c_void_p, ctypes.c_int)
-c_callback = callback_type(callback)
-
-
+# Define the RKLLM class, which includes initialization, inference, and release operations for the RKLLM model in the dynamic library
 class RKLLM(object):
-    def __init__(self,
-                 model_path: str,
-                 target_platform: str = "rk3588",
-                 prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
+    def __init__(self, model_path: str, lora_model_path: Optional[str] = None, prompt_cache_path: Optional[str] = None, prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
                  prompt_text_postfix: str = DEFAULT_PROMPT_TEXT_POSTFIX,
                  llm_params: Optional[LLMParams] = None):
+        rkllm_param = RKLLMParam()
         if llm_params is None:
             llm_params = LLMParams()
-        rknnllm_param = RKNNllmParam()
-        rknnllm_param.model_path = bytes(model_path, 'utf-8')
-
-        if target_platform == "rk3588":
-            rknnllm_param.num_npu_core = 3
-        elif target_platform == "rk3576":
-            rknnllm_param.num_npu_core = 1
+        rkllm_param.model_path = bytes(model_path, 'utf-8')
 
         # Initialize other parameters
-        rknnllm_param.max_context_len = llm_params.max_context_len
-        rknnllm_param.max_new_tokens = llm_params.max_new_tokens
-        rknnllm_param.top_k = llm_params.top_k
-        rknnllm_param.top_p = llm_params.top_p
-        rknnllm_param.temperature = llm_params.temperature
-        rknnllm_param.repeat_penalty = llm_params.repeat_penalty
-        rknnllm_param.frequency_penalty = llm_params.frequency_penalty
-        rknnllm_param.presence_penalty = llm_params.presence_penalty
-        rknnllm_param.mirostat = llm_params.mirostat
-        rknnllm_param.mirostat_tau = llm_params.mirostat_tau
-        rknnllm_param.mirostat_eta = llm_params.mirostat_eta
-        rknnllm_param.logprobs = llm_params.logprobs
-        rknnllm_param.top_logprobs = llm_params.top_logprobs
-        rknnllm_param.use_gpu = True
+        rkllm_param.max_context_len = llm_params.max_context_len
+        rkllm_param.max_new_tokens = llm_params.max_new_tokens
+        rkllm_param.top_k = llm_params.top_k
+        rkllm_param.top_p = llm_params.top_p
+        rkllm_param.temperature = llm_params.temperature
+        rkllm_param.repeat_penalty = llm_params.repeat_penalty
+        rkllm_param.frequency_penalty = llm_params.frequency_penalty
+        rkllm_param.presence_penalty = llm_params.presence_penalty
+        rkllm_param.mirostat = llm_params.mirostat
+        rkllm_param.mirostat_tau = llm_params.mirostat_tau
+        rkllm_param.mirostat_eta = llm_params.mirostat_eta
+        rkllm_param.logprobs = llm_params.logprobs
+        rkllm_param.top_logprobs = llm_params.top_logprobs
+        rkllm_param.use_gpu = True
+        rkllm_param.is_async = False
+        rkllm_param.img_start = "".encode('utf-8')
+        rkllm_param.img_end = "".encode('utf-8')
+        rkllm_param.img_content = "".encode('utf-8')
+        rkllm_param.extend_param.base_domain_id = 0
+
+        rkllm_param.extend_param.enabled_cpus_num = 4
+        rkllm_param.extend_param.enabled_cpus_mask = (1 << 4)|(1 << 5)|(1 << 6)|(1 << 7)
 
         self.handle = RKLLM_Handle_t()
 
-        # Set up the function prototypes with type hints
         self.rkllm_init = rkllm_lib.rkllm_init
-        self.rkllm_init.argtypes = [
-            ctypes.POINTER(RKLLM_Handle_t),
-            ctypes.POINTER(RKNNllmParam), callback_type
-        ]
+        self.rkllm_init.argtypes = [ctypes.POINTER(RKLLM_Handle_t), ctypes.POINTER(RKLLMParam), callback_type]
         self.rkllm_init.restype = ctypes.c_int
-
-        # Initialize the RKLLM handle
-        self.rkllm_init(ctypes.byref(self.handle), rknnllm_param, c_callback)
+        self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), callback)
 
         self.rkllm_run = rkllm_lib.rkllm_run
-        self.rkllm_run.argtypes = [
-            RKLLM_Handle_t,
-            ctypes.POINTER(ctypes.c_char), ctypes.c_void_p
-        ]
+        self.rkllm_run.argtypes = [RKLLM_Handle_t, ctypes.POINTER(RKLLMInput), ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p]
         self.rkllm_run.restype = ctypes.c_int
+        
+        self.set_chat_template = rkllm_lib.rkllm_set_chat_template
+        self.set_chat_template.argtypes = [RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        self.set_chat_template.restype = ctypes.c_int
+        
+        system_prompt = "<|im_start|>system You are a helpful assistant. <|im_end|>"
+        prompt_prefix = "<|im_start|>user"
+        prompt_postfix = "<|im_end|><|im_start|>assistant"
+        # self.set_chat_template(self.handle, ctypes.c_char_p(system_prompt.encode('utf-8')), ctypes.c_char_p(prompt_prefix.encode('utf-8')), ctypes.c_char_p(prompt_postfix.encode('utf-8')))
 
         self.rkllm_destroy = rkllm_lib.rkllm_destroy
         self.rkllm_destroy.argtypes = [RKLLM_Handle_t]
         self.rkllm_destroy.restype = ctypes.c_int
 
-        self.prompt_text_prefix = prompt_text_prefix
-        self.prompt_text_postfix = prompt_text_postfix
+        rkllm_lora_params = None
+        if lora_model_path:
+            lora_adapter_name = "test"
+            lora_adapter = RKLLMLoraAdapter()
+            ctypes.memset(ctypes.byref(lora_adapter), 0, ctypes.sizeof(RKLLMLoraAdapter))
+            lora_adapter.lora_adapter_path = ctypes.c_char_p((lora_model_path).encode('utf-8'))
+            lora_adapter.lora_adapter_name = ctypes.c_char_p((lora_adapter_name).encode('utf-8'))
+            lora_adapter.scale = 1.0
 
-    def run(self, prompt: str) -> None:
-        # Construct the full prompt with prefix and postfix
-        full_prompt = bytes(
-            self.prompt_text_prefix + prompt + self.prompt_text_postfix,
-            'utf-8')
+            rkllm_load_lora = rkllm_lib.rkllm_load_lora
+            rkllm_load_lora.argtypes = [RKLLM_Handle_t, ctypes.POINTER(RKLLMLoraAdapter)]
+            rkllm_load_lora.restype = ctypes.c_int
+            rkllm_load_lora(self.handle, ctypes.byref(lora_adapter))
+            rkllm_lora_params = RKLLMLoraParam()
+            rkllm_lora_params.lora_adapter_name = ctypes.c_char_p((lora_adapter_name).encode('utf-8'))
+        
+        self.rkllm_infer_params = RKLLMInferParam()
+        ctypes.memset(ctypes.byref(self.rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
+        self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
+        self.rkllm_infer_params.lora_params = ctypes.pointer(rkllm_lora_params) if rkllm_lora_params else None
+        self.rkllm_infer_params.keep_history = 0
 
-        # Run the model
-        self.rkllm_run(self.handle, full_prompt, ctypes.byref(userdata))
+        self.prompt_cache_path = None
+        if prompt_cache_path:
+            self.prompt_cache_path = prompt_cache_path
 
-    def release(self) -> None:
-        # Destroy the RKLLM handle
+            rkllm_load_prompt_cache = rkllm_lib.rkllm_load_prompt_cache
+            rkllm_load_prompt_cache.argtypes = [RKLLM_Handle_t, ctypes.c_char_p]
+            rkllm_load_prompt_cache.restype = ctypes.c_int
+            rkllm_load_prompt_cache(self.handle, ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
+
+    def run(self, prompt):
+        rkllm_input = RKLLMInput()
+        rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
+        rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
+        self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(self.rkllm_infer_params), None)
+        return
+
+    def release(self):
         self.rkllm_destroy(self.handle)

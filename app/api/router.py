@@ -1,51 +1,38 @@
-from contextlib import asynccontextmanager
 import json
 import logging
 import threading
 import time
+from typing import *
 from fastapi import APIRouter, FastAPI, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
-from app.core.rkllm import RKLLM
+from app.core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, OpenAIErrorResponse
 from core.util import num_tokens_from_string
 
 router = APIRouter(prefix="/v1")
 
 
-@router.post('/chat/completions')
-def chat_completions(data: dict,request: Request,
-                     response: Response) -> dict | StreamingResponse:
+@router.post('/chat/completions',response_model=None)
+def chat_completions(data: ChatCompletionRequest,request: Request,
+                     response: Response) -> StreamingResponse[ChatCompletionChunk] |  ChatCompletionResponse | OpenAIErrorResponse:
     global global_text, global_state
 
     if request.app.state.lock.locked():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {
+        return OpenAIErrorResponse(**{
             "error": {
                 "message": "Server RKLLM is busy! Please try again later.",
                 "type": "server_error",
-                "param": None,
-                "code": None
             }
-        }
+        })
 
     with request.app.state.lock:
         try:
 
-            if not data or 'messages' not in data:
-                response.status_code = status.HTTP_400_BAD_REQUEST
-                return {
-                    "error": {
-                        "message": "Неверный запрос",
-                        "type": "invalid_request_error",
-                        "param": None,
-                        "code": None
-                    }
-                }
-
             global_text = []
             global_state = -1
 
-            messages = data['messages']
+            messages = data.messages
             stream = data.get('stream', False)
             model = data.get('model', 'rkllm-default')
 
@@ -157,3 +144,9 @@ def chat_completions(data: dict,request: Request,
                     "code": None
                 }
             }
+
+
+@router.post('/completions')
+def chat_completions(data: CompletionRequest,request: Request,
+                     response: Response) -> CompletionResponse | OpenAIErrorResponse:
+    return {}

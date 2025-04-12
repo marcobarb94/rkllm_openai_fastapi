@@ -3,15 +3,20 @@ import json
 import resource
 import threading
 from fastapi import FastAPI
+import os
+from core.rkllm import RKLLM
+from api.router import router
 
-from app.core.rkllm import RKLLM
-
+resource.setrlimit(resource.RLIMIT_NOFILE, (102400, 102400))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     with open("configs/config.json") as fp:
         config = json.load(fp)
+    if not os.path.exists(config["model_path"]):
+        FileNotFoundError(f"Model not Found: {config['model_path']}")
     # Load the ML model
+    app.state.lock = threading.Lock()
     app.state.rkllm_model = RKLLM(config["model_path"],
                                   config["target_platform"])
     yield
@@ -19,10 +24,6 @@ async def lifespan(app: FastAPI):
     app.state.rkllm_model.release()
 
 
-if __name__ == "__main__":
-    global app
-    app = FastAPI(lifespan=lifespan, title="RKLLM OpenAI", docs_url="/")
+app = FastAPI(lifespan=lifespan, title="RKLLM OpenAI", docs_url="/")
+app.include_router(router)
 
-    app.state.lock = threading.Lock()
-    # Установка ограничения на количество файловых дескрипторов
-    resource.setrlimit(resource.RLIMIT_NOFILE, (102400, 102400))

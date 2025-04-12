@@ -1,4 +1,4 @@
 {
-    "model_path": "",
+    "model_path": "/home/ago/pyth/cht/Qwen2-VL-2B_llm_w8a8_rk3588.rkllm",
     "target_platform": "rk3588"
 }
