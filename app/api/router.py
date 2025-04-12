@@ -6,9 +6,9 @@ from typing import *
 from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from app.core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
+from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
 from core.util import num_tokens_from_string, parse_message_to_prompt
-from transformers import AutoTokenizer, AutoProcessor
+from core.rkllm import global_text, global_state
 
 router = APIRouter(prefix="/v1")
 
@@ -32,7 +32,7 @@ def chat_completions(
             global_state = -1
 
             stream = data.stream
-            model = data.model
+            model = data.model if data.model else request.app.state.model_name
 
             prompt = parse_message_to_prompt(
                 data.messages, request.app.state.tokenizer_config)
@@ -59,23 +59,17 @@ def chat_completions(
 
                         if stream:
                             response = ChatCompletionChunk(
-                                **{
-                                    "id":
-                                    f"chatcmpl-{time.time()}",
-                                    "object":
-                                    "chat.completion.chunk",
-                                    "created":
-                                    int(time.time()),
-                                    "model":
-                                    model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {
-                                            "content": new_text
-                                        },
-                                        "finish_reason": None
-                                    }]
-                                })
+                                id=f"chatcmpl-{time.time()}",
+                                object="chat.completion.chunk",
+                                created=int(time.time()),
+                                model=model,
+                                choices=[{
+                                    "index": 0,
+                                    "delta": {
+                                        "content": new_text
+                                    },
+                                    "finish_reason": None
+                                }])
 
                             yield f"data: {json.dumps(response)}\n\n"
                         time.sleep(0.005)
@@ -100,7 +94,7 @@ def chat_completions(
                                 "finish_reason": "stop"
                             }]
                         })
-                    yield f"data: {json.dumps(final_response)}\n\n"
+                    yield f"data: {final_response.model_dump_json()}\n\n"
                     yield "data: [DONE]\n\n"
                 else:
                     yield ChatCompletionResponse(
@@ -147,7 +141,8 @@ def chat_completions(
 #     return {}
 
 
-@router.post('/models')
+@router.get('/models')
 def get_models(request: Request) -> ModelsResponse:
-    return ModelsResponse(object="list",
+    return ModelsResponse(
+        object="list",
         data=[Model(id=request.app.state.model_name, object="model")])
