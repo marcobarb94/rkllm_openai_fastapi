@@ -1,3 +1,5 @@
 #! /bin/bash
 
-python -m app/main.py --port 8080
+export UVICORN_PORT=9988
+cd app
+uvicorn main:app --host 0.0.0.0
