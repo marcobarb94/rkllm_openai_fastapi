@@ -134,8 +134,8 @@ class RKLLMResult(ctypes.Structure):
 
 
 class LLMParams(BaseModel):
-    max_context_len: int = 320
-    max_new_tokens: int = 512
+    max_context_len: int = 4096
+    max_new_tokens: int = 1024
     top_k: int = 1
     top_p: float = 0.9
     temperature: float = 0.8

@@ -1,12 +1,8 @@
 import ctypes
 import sys
-import os
-import subprocess
-import resource
+import queue
 import threading
-import time
-import argparse
-import json
+
 from typing import Optional
 
 from core.entities_llm import *
@@ -45,7 +41,7 @@ lock = threading.Lock()
 is_blocking = False
 
 # Define global variables to store the callback function output for displaying in the Gradio interface
-global_text = ''
+global_text = queue.Queue()
 global_state = -1
 split_byte_data = bytes(b"") # Used to store the segmented byte data
 
@@ -62,7 +58,7 @@ def callback_impl(result, userdata, state):
         sys.stdout.flush()
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
-        global_text += result.contents.text.decode('utf-8')
+        global_text.put(result.contents.text.decode('utf-8'))
     
 
 # Connect the callback function between the Python side and the C++ side

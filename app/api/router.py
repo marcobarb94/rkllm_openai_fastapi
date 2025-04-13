@@ -1,7 +1,7 @@
 import json
 import logging
 import threading
-import time
+from time import time, sleep
 from typing import *
 from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -28,7 +28,7 @@ def chat_completions(
     with request.app.state.lock:
         try:
 
-            global_text = []
+            global_text._init(4096)
             global_state = -1
 
             stream = data.stream
@@ -39,7 +39,7 @@ def chat_completions(
 
             prompt = prompt.strip()
 
-            def generate():
+            def generate() -> Generator:
                 nonlocal prompt
                 rkllm_output = ""
                 prompt_tokens = num_tokens_from_string(prompt)
@@ -52,16 +52,17 @@ def chat_completions(
                 model_thread_finished = False
 
                 while not model_thread_finished:
-                    while len(global_text) > 0:
-                        new_text = global_text.pop(0)
+                    sleep(0.005)
+                    while not global_text.empty():
+                        new_text = global_text.get()
                         rkllm_output += new_text
                         completion_tokens += num_tokens_from_string(new_text)
 
                         if stream:
-                            response = ChatCompletionChunk(
-                                id=f"chatcmpl-{time.time()}",
+                            _res = ChatCompletionChunk(
+                                id=f"chatcmpl-{time()}",
                                 object="chat.completion.chunk",
-                                created=int(time.time()),
+                                created=int(time()),
                                 model=model,
                                 choices=[{
                                     "index": 0,
@@ -71,21 +72,23 @@ def chat_completions(
                                     "finish_reason": None
                                 }])
 
-                            yield f"data: {json.dumps(response)}\n\n"
-                        time.sleep(0.005)
+                            yield f"data: {_res.model_dump_json()}\n\n"
+                        sleep(0.005)
 
                     model_thread.join(timeout=0.005)
                     model_thread_finished = not model_thread.is_alive()
+                    if request._is_disconnected: # await request.is_disconnected():
+                        logging.info("User Stops")
 
                 if stream:
                     final_response = ChatCompletionChunk(
                         **{
                             "id":
-                            f"chatcmpl-{time.time()}",
+                            f"chatcmpl-{time()}",
                             "object":
                             "chat.completion.chunk",
                             "created":
-                            int(time.time()),
+                            int(time()),
                             "model":
                             model,
                             "choices": [{
@@ -131,7 +134,7 @@ def chat_completions(
         except Exception as e:
             logging.error(e)
             return OpenAIErrorResponse(
-                error=OpenAIErrorDetail(message=e, type="server_error"))
+                error=OpenAIErrorDetail(message=str(e), type="server_error"))
 
 
 # @router.post('/completions')
