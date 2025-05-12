@@ -2,31 +2,31 @@ import ctypes
 
 from pydantic import BaseModel
 
-
 LLMCallState = ctypes.c_int
-LLMCallState.RKLLM_RUN_NORMAL  = 0
-LLMCallState.RKLLM_RUN_WAITING  = 1
-LLMCallState.RKLLM_RUN_FINISH  = 2
-LLMCallState.RKLLM_RUN_ERROR   = 3
+LLMCallState.RKLLM_RUN_NORMAL = 0
+LLMCallState.RKLLM_RUN_WAITING = 1
+LLMCallState.RKLLM_RUN_FINISH = 2
+LLMCallState.RKLLM_RUN_ERROR = 3
 
 RKLLMInputMode = ctypes.c_int
-RKLLMInputMode.RKLLM_INPUT_PROMPT      = 0
-RKLLMInputMode.RKLLM_INPUT_TOKEN       = 1
-RKLLMInputMode.RKLLM_INPUT_EMBED       = 2
-RKLLMInputMode.RKLLM_INPUT_MULTIMODAL  = 3
+RKLLMInputMode.RKLLM_INPUT_PROMPT = 0
+RKLLMInputMode.RKLLM_INPUT_TOKEN = 1
+RKLLMInputMode.RKLLM_INPUT_EMBED = 2
+RKLLMInputMode.RKLLM_INPUT_MULTIMODAL = 3
 
 RKLLMInferMode = ctypes.c_int
 RKLLMInferMode.RKLLM_INFER_GENERATE = 0
 RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER = 1
 RKLLMInferMode.RKLLM_INFER_GET_LOGITS = 2
+
+
 class RKLLMExtendParam(ctypes.Structure):
-    _fields_ = [
-        ("base_domain_id", ctypes.c_int32),
-        ("embed_flash", ctypes.c_int8),
-        ("enabled_cpus_num", ctypes.c_int8),
-        ("enabled_cpus_mask", ctypes.c_uint32),
-        ("reserved", ctypes.c_uint8 * 106)
-    ]
+    _fields_ = [("base_domain_id", ctypes.c_int32),
+                ("embed_flash", ctypes.c_int8),
+                ("enabled_cpus_num", ctypes.c_int8),
+                ("enabled_cpus_mask", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint8 * 106)]
+
 
 class RKLLMParam(ctypes.Structure):
     _fields_ = [
@@ -51,86 +51,72 @@ class RKLLMParam(ctypes.Structure):
         ("extend_param", RKLLMExtendParam),
     ]
 
+
 class RKLLMLoraAdapter(ctypes.Structure):
-    _fields_ = [
-        ("lora_adapter_path", ctypes.c_char_p),
-        ("lora_adapter_name", ctypes.c_char_p),
-        ("scale", ctypes.c_float)
-    ]
+    _fields_ = [("lora_adapter_path", ctypes.c_char_p),
+                ("lora_adapter_name", ctypes.c_char_p),
+                ("scale", ctypes.c_float)]
+
 
 class RKLLMEmbedInput(ctypes.Structure):
-    _fields_ = [
-        ("embed", ctypes.POINTER(ctypes.c_float)),
-        ("n_tokens", ctypes.c_size_t)
-    ]
+    _fields_ = [("embed", ctypes.POINTER(ctypes.c_float)),
+                ("n_tokens", ctypes.c_size_t)]
+
 
 class RKLLMTokenInput(ctypes.Structure):
-    _fields_ = [
-        ("input_ids", ctypes.POINTER(ctypes.c_int32)),
-        ("n_tokens", ctypes.c_size_t)
-    ]
+    _fields_ = [("input_ids", ctypes.POINTER(ctypes.c_int32)),
+                ("n_tokens", ctypes.c_size_t)]
+
 
 class RKLLMMultiModelInput(ctypes.Structure):
-    _fields_ = [
-        ("prompt", ctypes.c_char_p),
-        ("image_embed", ctypes.POINTER(ctypes.c_float)),
-        ("n_image_tokens", ctypes.c_size_t)
-    ]
+    _fields_ = [("prompt", ctypes.c_char_p),
+                ("image_embed", ctypes.POINTER(ctypes.c_float)),
+                ("n_image_tokens", ctypes.c_size_t),
+                ("n_image", ctypes.c_size_t), ("image_width", ctypes.c_size_t),
+                ("image_height", ctypes.c_size_t)]
+
 
 class RKLLMInputUnion(ctypes.Union):
-    _fields_ = [
-        ("prompt_input", ctypes.c_char_p),
-        ("embed_input", RKLLMEmbedInput),
-        ("token_input", RKLLMTokenInput),
-        ("multimodal_input", RKLLMMultiModelInput)
-    ]
+    _fields_ = [("prompt_input", ctypes.c_char_p),
+                ("embed_input", RKLLMEmbedInput),
+                ("token_input", RKLLMTokenInput),
+                ("multimodal_input", RKLLMMultiModelInput)]
+
 
 class RKLLMInput(ctypes.Structure):
-    _fields_ = [
-        ("input_mode", ctypes.c_int),
-        ("input_data", RKLLMInputUnion)
-    ]
+    _fields_ = [("input_mode", ctypes.c_int), ("input_data", RKLLMInputUnion)]
+
 
 class RKLLMLoraParam(ctypes.Structure):
-    _fields_ = [
-        ("lora_adapter_name", ctypes.c_char_p)
-    ]
+    _fields_ = [("lora_adapter_name", ctypes.c_char_p)]
+
 
 class RKLLMPromptCacheParam(ctypes.Structure):
-    _fields_ = [
-        ("save_prompt_cache", ctypes.c_int),
-        ("prompt_cache_path", ctypes.c_char_p)
-    ]
+    _fields_ = [("save_prompt_cache", ctypes.c_int),
+                ("prompt_cache_path", ctypes.c_char_p)]
+
 
 class RKLLMInferParam(ctypes.Structure):
-    _fields_ = [
-        ("mode", RKLLMInferMode),
-        ("lora_params", ctypes.POINTER(RKLLMLoraParam)),
-        ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam)),
-        ("keep_history", ctypes.c_int)
-    ]
+    _fields_ = [("mode", RKLLMInferMode),
+                ("lora_params", ctypes.POINTER(RKLLMLoraParam)),
+                ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam)),
+                ("keep_history", ctypes.c_int)]
+
 
 class RKLLMResultLastHiddenLayer(ctypes.Structure):
-    _fields_ = [
-        ("hidden_states", ctypes.POINTER(ctypes.c_float)),
-        ("embd_size", ctypes.c_int),
-        ("num_tokens", ctypes.c_int)
-    ]
+    _fields_ = [("hidden_states", ctypes.POINTER(ctypes.c_float)),
+                ("embd_size", ctypes.c_int), ("num_tokens", ctypes.c_int)]
+
 
 class RKLLMResultLogits(ctypes.Structure):
-    _fields_ = [
-        ("logits", ctypes.POINTER(ctypes.c_float)),
-        ("vocab_size", ctypes.c_int),
-        ("num_tokens", ctypes.c_int)
-    ]
+    _fields_ = [("logits", ctypes.POINTER(ctypes.c_float)),
+                ("vocab_size", ctypes.c_int), ("num_tokens", ctypes.c_int)]
+
 
 class RKLLMResult(ctypes.Structure):
-    _fields_ = [
-        ("text", ctypes.c_char_p),
-        ("token_id", ctypes.c_int),
-        ("last_hidden_layer", RKLLMResultLastHiddenLayer),
-        ("logits", RKLLMResultLogits)
-    ]
+    _fields_ = [("text", ctypes.c_char_p), ("token_id", ctypes.c_int),
+                ("last_hidden_layer", RKLLMResultLastHiddenLayer),
+                ("logits", RKLLMResultLogits)]
 
 
 class LLMParams(BaseModel):
