@@ -2,9 +2,11 @@ import ctypes
 import sys
 import queue
 import threading
+import logging
 
 from typing import Optional
 
+from core.util import get_sentence_embedding
 from core.entities_llm import *
 
 # Set the dynamic library path
@@ -43,26 +45,49 @@ is_blocking = False
 # Define global variables to store the callback function output for displaying in the Gradio interface
 global_text = queue.Queue()
 global_state = -1
-split_byte_data = bytes(b"") # Used to store the segmented byte data
+split_byte_data = bytes(b"")  # Used to store the segmented byte data
+
 
 # Define the callback function
 def callback_impl(result, userdata, state):
     global global_text, global_state, split_byte_data
     if state == LLMCallState.RKLLM_RUN_FINISH:
         global_state = state
-        print("\n")
         sys.stdout.flush()
     elif state == LLMCallState.RKLLM_RUN_ERROR:
         global_state = state
-        print("run error")
+        logging.error("run error")
         sys.stdout.flush()
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
-        global_text.put(result.contents.text.decode('utf-8'))
-    
+        last_hidden_layer_res = result.contents.last_hidden_layer
+        if last_hidden_layer_res.embd_size != 0 and last_hidden_layer_res.num_tokens != 0:
+            '''
+            If using the GET_LAST_HIDDEN_LAYER function, the callback interface will return the memory pointer: last_hidden_layer, the number of tokens: num_tokens, and the size of the hidden layer: embd_size.
+            With these three parameters, you can retrieve the data from last_hidden_layer.
+            Note: The data needs to be retrieved during the current callback; if not obtained in time, the pointer will be released by the next callback.
+            '''
+            last_hidden_layer_res = result.contents.last_hidden_layer
+            if last_hidden_layer_res.embd_size != 0 and last_hidden_layer_res.num_tokens != 0:
+                data_size = last_hidden_layer_res.embd_size * last_hidden_layer_res.num_tokens * ctypes.sizeof(
+                    ctypes.c_float)
+                logging.info(f"data_size: {data_size}")
+                data = ctypes.cast(last_hidden_layer_res.hidden_states,
+                                   ctypes.POINTER(ctypes.c_float))
+                float_array_type = ctypes.c_float * (
+                    data_size // ctypes.sizeof(ctypes.c_float))
+                float_array = float_array_type.from_address(
+                    ctypes.addressof(data.contents))
+                global_text.put(
+                    get_sentence_embedding(float_array,
+                                           last_hidden_layer_res.embd_size))
+        else:
+            global_text.put(result.contents.text.decode('utf-8'))
+
 
 # Connect the callback function between the Python side and the C++ side
-callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult), ctypes.c_void_p, ctypes.c_int)
+callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult),
+                                 ctypes.c_void_p, ctypes.c_int)
 callback = callback_type(callback_impl)
 
 DEFAULT_PROMPT_TEXT_PREFIX = "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
@@ -71,7 +96,12 @@ DEFAULT_PROMPT_TEXT_POSTFIX = "<|im_end|><|im_start|>assistant"
 
 # Define the RKLLM class, which includes initialization, inference, and release operations for the RKLLM model in the dynamic library
 class RKLLM(object):
-    def __init__(self, model_path: str, lora_model_path: Optional[str] = None, prompt_cache_path: Optional[str] = None, prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
+
+    def __init__(self,
+                 model_path: str,
+                 lora_model_path: Optional[str] = None,
+                 prompt_cache_path: Optional[str] = None,
+                 prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
                  prompt_text_postfix: str = DEFAULT_PROMPT_TEXT_POSTFIX,
                  llm_params: Optional[LLMParams] = None):
         rkllm_param = RKLLMParam()
@@ -101,23 +131,34 @@ class RKLLM(object):
         rkllm_param.extend_param.base_domain_id = 0
 
         rkllm_param.extend_param.enabled_cpus_num = 4
-        rkllm_param.extend_param.enabled_cpus_mask = (1 << 4)|(1 << 5)|(1 << 6)|(1 << 7)
+        rkllm_param.extend_param.enabled_cpus_mask = (1 << 4) | (1 << 5) | (
+            1 << 6) | (1 << 7)
 
         self.handle = RKLLM_Handle_t()
 
         self.rkllm_init = rkllm_lib.rkllm_init
-        self.rkllm_init.argtypes = [ctypes.POINTER(RKLLM_Handle_t), ctypes.POINTER(RKLLMParam), callback_type]
+        self.rkllm_init.argtypes = [
+            ctypes.POINTER(RKLLM_Handle_t),
+            ctypes.POINTER(RKLLMParam), callback_type
+        ]
         self.rkllm_init.restype = ctypes.c_int
-        self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), callback)
+        self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param),
+                        callback)
 
         self.rkllm_run = rkllm_lib.rkllm_run
-        self.rkllm_run.argtypes = [RKLLM_Handle_t, ctypes.POINTER(RKLLMInput), ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p]
+        self.rkllm_run.argtypes = [
+            RKLLM_Handle_t,
+            ctypes.POINTER(RKLLMInput),
+            ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p
+        ]
         self.rkllm_run.restype = ctypes.c_int
-        
+
         self.set_chat_template = rkllm_lib.rkllm_set_chat_template
-        self.set_chat_template.argtypes = [RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        self.set_chat_template.argtypes = [
+            RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p
+        ]
         self.set_chat_template.restype = ctypes.c_int
-        
+
         system_prompt = "<|im_start|>system You are a helpful assistant. <|im_end|>"
         prompt_prefix = "<|im_start|>user"
         prompt_postfix = "<|im_end|><|im_start|>assistant"
@@ -131,22 +172,31 @@ class RKLLM(object):
         if lora_model_path:
             lora_adapter_name = "test"
             lora_adapter = RKLLMLoraAdapter()
-            ctypes.memset(ctypes.byref(lora_adapter), 0, ctypes.sizeof(RKLLMLoraAdapter))
-            lora_adapter.lora_adapter_path = ctypes.c_char_p((lora_model_path).encode('utf-8'))
-            lora_adapter.lora_adapter_name = ctypes.c_char_p((lora_adapter_name).encode('utf-8'))
+            ctypes.memset(ctypes.byref(lora_adapter), 0,
+                          ctypes.sizeof(RKLLMLoraAdapter))
+            lora_adapter.lora_adapter_path = ctypes.c_char_p(
+                (lora_model_path).encode('utf-8'))
+            lora_adapter.lora_adapter_name = ctypes.c_char_p(
+                (lora_adapter_name).encode('utf-8'))
             lora_adapter.scale = 1.0
 
             rkllm_load_lora = rkllm_lib.rkllm_load_lora
-            rkllm_load_lora.argtypes = [RKLLM_Handle_t, ctypes.POINTER(RKLLMLoraAdapter)]
+            rkllm_load_lora.argtypes = [
+                RKLLM_Handle_t,
+                ctypes.POINTER(RKLLMLoraAdapter)
+            ]
             rkllm_load_lora.restype = ctypes.c_int
             rkllm_load_lora(self.handle, ctypes.byref(lora_adapter))
             rkllm_lora_params = RKLLMLoraParam()
-            rkllm_lora_params.lora_adapter_name = ctypes.c_char_p((lora_adapter_name).encode('utf-8'))
-        
+            rkllm_lora_params.lora_adapter_name = ctypes.c_char_p(
+                (lora_adapter_name).encode('utf-8'))
+
         self.rkllm_infer_params = RKLLMInferParam()
-        ctypes.memset(ctypes.byref(self.rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
+        ctypes.memset(ctypes.byref(self.rkllm_infer_params), 0,
+                      ctypes.sizeof(RKLLMInferParam))
         self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
-        self.rkllm_infer_params.lora_params = ctypes.pointer(rkllm_lora_params) if rkllm_lora_params else None
+        self.rkllm_infer_params.lora_params = ctypes.pointer(
+            rkllm_lora_params) if rkllm_lora_params else None
         self.rkllm_infer_params.keep_history = 0
 
         self.prompt_cache_path = None
@@ -154,15 +204,22 @@ class RKLLM(object):
             self.prompt_cache_path = prompt_cache_path
 
             rkllm_load_prompt_cache = rkllm_lib.rkllm_load_prompt_cache
-            rkllm_load_prompt_cache.argtypes = [RKLLM_Handle_t, ctypes.c_char_p]
+            rkllm_load_prompt_cache.argtypes = [
+                RKLLM_Handle_t, ctypes.c_char_p
+            ]
             rkllm_load_prompt_cache.restype = ctypes.c_int
-            rkllm_load_prompt_cache(self.handle, ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
+            rkllm_load_prompt_cache(
+                self.handle,
+                ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
 
-    def run(self, prompt):
+    def run(self, prompt: str, embeddings: bool = False):
         rkllm_input = RKLLMInput()
         rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
-        rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
-        self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(self.rkllm_infer_params), None)
+        rkllm_input.input_data.prompt_input = ctypes.c_char_p(
+            prompt.encode('utf-8'))
+        self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER if embeddings else RKLLMInferMode.RKLLM_INFER_GENERATE
+        self.rkllm_run(self.handle, ctypes.byref(rkllm_input),
+                       ctypes.byref(self.rkllm_infer_params), None)
         return
 
     def release(self):

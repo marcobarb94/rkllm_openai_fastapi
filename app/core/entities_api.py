@@ -179,6 +179,9 @@ class OpenAIErrorResponse(BaseModel):
 class Model(BaseModel):
     id: str = Field(..., description="ID del modello (es. 'text-davinci-003')")
     object: str = Field(..., description="Tipo di oggetto (es. 'model')")
+
+
 class ModelsResponse(BaseModel):
-    object: str = Field(..., description="Tipo di oggetto della risposta (es. 'list')")
+    object: str = Field(
+        ..., description="Tipo di oggetto della risposta (es. 'list')")
     data: List[Model] = Field(..., description="Lista dei modelli disponibili")
