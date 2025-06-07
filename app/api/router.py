@@ -153,7 +153,7 @@ def get_models(request: Request) -> ModelsResponse:
         data=[Model(id=request.app.state.model_name, object="model")])
 
 
-@router.post("/v1/embeddings",
+@router.post("/embeddings",
              response_model=EmbeddingResponse | OpenAIErrorResponse)
 async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
     with request.app.state.lock:
