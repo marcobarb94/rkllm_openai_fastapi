@@ -53,11 +53,9 @@ def callback_impl(result, userdata, state):
     global global_text, global_state, split_byte_data
     if state == LLMCallState.RKLLM_RUN_FINISH:
         global_state = state
-        sys.stdout.flush()
     elif state == LLMCallState.RKLLM_RUN_ERROR:
         global_state = state
         logging.error("run error")
-        sys.stdout.flush()
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
         last_hidden_layer_res = result.contents.last_hidden_layer
@@ -67,20 +65,18 @@ def callback_impl(result, userdata, state):
             With these three parameters, you can retrieve the data from last_hidden_layer.
             Note: The data needs to be retrieved during the current callback; if not obtained in time, the pointer will be released by the next callback.
             '''
-            last_hidden_layer_res = result.contents.last_hidden_layer
-            if last_hidden_layer_res.embd_size != 0 and last_hidden_layer_res.num_tokens != 0:
-                data_size = last_hidden_layer_res.embd_size * last_hidden_layer_res.num_tokens * ctypes.sizeof(
-                    ctypes.c_float)
-                logging.info(f"data_size: {data_size}")
-                data = ctypes.cast(last_hidden_layer_res.hidden_states,
-                                   ctypes.POINTER(ctypes.c_float))
-                float_array_type = ctypes.c_float * (
-                    data_size // ctypes.sizeof(ctypes.c_float))
-                float_array = float_array_type.from_address(
-                    ctypes.addressof(data.contents))
-                global_text.put(
-                    get_sentence_embedding(float_array,
-                                           last_hidden_layer_res.embd_size))
+            data_size = last_hidden_layer_res.embd_size * last_hidden_layer_res.num_tokens * ctypes.sizeof(
+                ctypes.c_float)
+            logging.info(f"data_size: {data_size}")
+            data = ctypes.cast(last_hidden_layer_res.hidden_states,
+                                ctypes.POINTER(ctypes.c_float))
+            float_array_type = ctypes.c_float * (
+                data_size // ctypes.sizeof(ctypes.c_float))
+            float_array = float_array_type.from_address(
+                ctypes.addressof(data.contents))
+            global_text.put(
+                get_sentence_embedding(float_array,
+                                        last_hidden_layer_res.embd_size))
         else:
             global_text.put(result.contents.text.decode('utf-8'))
 

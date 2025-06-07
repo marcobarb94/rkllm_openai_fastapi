@@ -185,3 +185,21 @@ class ModelsResponse(BaseModel):
     object: str = Field(
         ..., description="Tipo di oggetto della risposta (es. 'list')")
     data: List[Model] = Field(..., description="Lista dei modelli disponibili")
+
+# Richiesta compatibile con OpenAI
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: List[str]
+
+# Oggetto singolo di embedding
+class EmbeddingData(BaseModel):
+    object: str
+    embedding: List[float]
+    index: int
+
+# Risposta compatibile con OpenAI
+class EmbeddingResponse(BaseModel):
+    object: str = "list"
+    data: List[EmbeddingData]
+    model: str
+    usage: dict  # Opzionale, per monitorare token usati

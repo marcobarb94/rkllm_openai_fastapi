@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import threading
@@ -6,7 +7,8 @@ from typing import *
 from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
+from core.embeddings import generate_embeddings
+from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, EmbeddingData, EmbeddingRequest, EmbeddingResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
 from core.util import num_tokens_from_string, parse_message_to_prompt
 from core.rkllm import global_text, global_state
 
@@ -77,7 +79,7 @@ def chat_completions(
 
                     model_thread.join(timeout=0.005)
                     model_thread_finished = not model_thread.is_alive()
-                    if request._is_disconnected: # await request.is_disconnected():
+                    if request._is_disconnected:  # await request.is_disconnected():
                         logging.info("User Stops")
 
                 if stream:
@@ -149,3 +151,33 @@ def get_models(request: Request) -> ModelsResponse:
     return ModelsResponse(
         object="list",
         data=[Model(id=request.app.state.model_name, object="model")])
+
+
+@router.post("/v1/embeddings",
+             response_model=EmbeddingResponse | OpenAIErrorResponse)
+async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
+    with request.app.state.lock:
+        # Creiamo la lista di embeddings con indice
+        try:
+            embedding_list = [
+                EmbeddingData(object="embedding",
+                              embedding=await asyncio.to_thread(
+                                  generate_embeddings,
+                                  text=_r,
+                                  rkllm_model=request.app.state.rkllm_model),
+                              index=i)
+                for i, _r in enumerate(ebm_request.input)
+            ]
+        except Exception as e:
+            logging.error(e)
+            return OpenAIErrorResponse(
+                error=OpenAIErrorDetail(message=str(e), type="server_error"))
+
+    return EmbeddingResponse(
+        object="list",
+        data=embedding_list,
+        model=ebm_request.model,
+        usage={
+            "total_tokens":
+            sum(len(text.split()) for text in ebm_request.input)
+        })
