@@ -4,9 +4,9 @@ import queue
 import threading
 import logging
 
-from typing import Optional
+from typing import Any, Collection, Literal, Optional
 
-from core.util import get_sentence_embedding
+from core.util import EmbeddingsLLMData
 from core.entities_llm import *
 
 # Set the dynamic library path
@@ -48,6 +48,17 @@ global_state = -1
 split_byte_data = bytes(b"")  # Used to store the segmented byte data
 
 
+def pointer_to_pyth_float(
+        pointer: Any,
+        len_data: int,
+        data_type: ctypes = ctypes.c_float) -> Collection[Any]:
+    data_size = len_data * ctypes.sizeof(data_type)
+    logging.info(f"data_size: {data_size}")
+    data = ctypes.cast(pointer, ctypes.POINTER(data_type))
+    float_array_type = data_type * (data_size // ctypes.sizeof(data_type))
+    return float_array_type.from_address(ctypes.addressof(data.contents))
+
+
 # Define the callback function
 def callback_impl(result, userdata, state):
     global global_text, global_state, split_byte_data
@@ -59,24 +70,26 @@ def callback_impl(result, userdata, state):
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
         last_hidden_layer_res = result.contents.last_hidden_layer
+        logits_res = result.contents.logits
         if last_hidden_layer_res.embd_size != 0 and last_hidden_layer_res.num_tokens != 0:
             '''
             If using the GET_LAST_HIDDEN_LAYER function, the callback interface will return the memory pointer: last_hidden_layer, the number of tokens: num_tokens, and the size of the hidden layer: embd_size.
             With these three parameters, you can retrieve the data from last_hidden_layer.
             Note: The data needs to be retrieved during the current callback; if not obtained in time, the pointer will be released by the next callback.
             '''
-            data_size = last_hidden_layer_res.embd_size * last_hidden_layer_res.num_tokens * ctypes.sizeof(
-                ctypes.c_float)
-            logging.info(f"data_size: {data_size}")
-            data = ctypes.cast(last_hidden_layer_res.hidden_states,
-                                ctypes.POINTER(ctypes.c_float))
-            float_array_type = ctypes.c_float * (
-                data_size // ctypes.sizeof(ctypes.c_float))
-            float_array = float_array_type.from_address(
-                ctypes.addressof(data.contents))
+            float_array = pointer_to_pyth_float(
+                pointer=last_hidden_layer_res.hidden_states,
+                len_data=last_hidden_layer_res.embd_size *
+                last_hidden_layer_res.num_tokens)
             global_text.put(
-                get_sentence_embedding(float_array,
-                                        last_hidden_layer_res.embd_size))
+                EmbeddingsLLMData(emb_vocab_size=last_hidden_layer_res.embd_size,
+                                  hidden_layer=float_array))
+        elif logits_res.vocab_size != 0 and logits_res.num_tokens != 0:
+            float_array = pointer_to_pyth_float(
+                pointer=logits_res.logits,
+                len_data=logits_res.vocab_size * logits_res.num_tokens)
+            global_text.put(EmbeddingsLLMData(logits=float_array,emb_vocab_size=logits_res.vocab_size))
+            print(result.contents.text.decode('utf-8'))
         else:
             global_text.put(result.contents.text.decode('utf-8'))
 
@@ -208,12 +221,23 @@ class RKLLM(object):
                 self.handle,
                 ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
 
-    def run(self, prompt: str, embeddings: bool = False):
+    def run(self,
+            prompt: str,
+            infer_type: Literal["generate", "hidden_layer",
+                                "logit"] = "generate"):
         rkllm_input = RKLLMInput()
         rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
         rkllm_input.input_data.prompt_input = ctypes.c_char_p(
             prompt.encode('utf-8'))
-        self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER if embeddings else RKLLMInferMode.RKLLM_INFER_GENERATE
+
+        match infer_type:
+            case "generate":
+                self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
+            case "hidden_layer":
+                self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER
+            case "logit":
+                self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LOGITS
+
         self.rkllm_run(self.handle, ctypes.byref(rkllm_input),
                        ctypes.byref(self.rkllm_infer_params), None)
         return

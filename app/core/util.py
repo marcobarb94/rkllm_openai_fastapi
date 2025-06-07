@@ -1,4 +1,4 @@
-from typing import Collection, List, Literal
+from typing import Collection, List, Literal, Optional, Self
 import tiktoken
 from jinja2 import Template
 import json
@@ -19,18 +19,28 @@ def parse_message_to_prompt(messages: List[str],
     return template.render(messages=messages)
 
 
-def get_sentence_embedding(float_array: Collection[float],
-                           embed_size: int,
-                           emb_type: Literal["mean", "max", "last"] = "mean"):
-    """Quale metodo usare? ✔ Se vuoi semplicità → Mean pooling ✔ Se vuoi cogliere le parti dominanti → Max pooling ✔ Se il testo è breve e importante → Ultimo token ✔ Se vuoi massima qualità → Concatenazione o PCA
-    """
-    hidden_states = np.array(float_array).reshape(
-        len(float_array) // embed_size, embed_size)
-    match emb_type:
-        case "mean":
-            _emb = np.mean(hidden_states, axis=0)
-        case "max":
-            _emb = np.amax(hidden_states, axis=0)
-        case "last":
-            _emb = hidden_states[-1, :]
-    return _emb / np.linalg.norm(_emb)
+class EmbeddingsLLMData:
+    token_size: int
+    hidden_layer: np.ndarray[float, float]
+    logits: np.ndarray[float]
+
+    def __init__(self,
+                 logits: Optional[Collection[float]] = None,
+                 emb_vocab_size: Optional[int] = None,
+                 hidden_layer: Optional[Collection[float]] = None):
+        if logits is not None:
+            self.token_size = len(logits) // emb_vocab_size
+
+            self.logits = np.array(logits).reshape(self.token_size,
+                                                   emb_vocab_size)
+        if hidden_layer is not None:
+            self.token_size = len(hidden_layer) // emb_vocab_size
+            self.hidden_layer = np.array(hidden_layer).reshape(
+                self.token_size, emb_vocab_size)
+
+    def merge(self, other: Self):
+        if other.logits is not None:
+            self.logits = other.logits
+        if other.hidden_layer is not None:
+            self.hidden_layer = other.hidden_layer
+            self.token_size = other.token_size
