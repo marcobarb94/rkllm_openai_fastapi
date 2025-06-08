@@ -68,7 +68,8 @@ async def chat_completions(
 
                         yield f"data: {_res.model_dump_json()}\n\n"
 
-                    if request._is_disconnected:  # await request.is_disconnected():
+                    if await request.is_disconnected(
+                    ):  # await request.is_disconnected():
                         break
 
                 if stream:
@@ -118,21 +119,115 @@ async def chat_completions(
                         })
 
             if stream:
-                return StreamingResponse(generate(prompt,request.app.state.governor_engine),
+                return StreamingResponse(generate(
+                    prompt, request.app.state.governor_engine),
                                          media_type='text/event-stream')
             else:
-                return await anext(generate(prompt,request.app.state.governor_engine))
+                return await anext(
+                    generate(prompt, request.app.state.governor_engine))
         except Exception as e:
             logging.error(e)
             return OpenAIErrorResponse(
                 error=OpenAIErrorDetail(message=str(e), type="server_error"))
 
 
-# @router.post('/completions')
-# def completions(
-#         data: CompletionRequest, request: Request,
-#         response: Response) -> CompletionResponse | OpenAIErrorResponse:
-#     return {}
+@router.post('/completions', response_model=None)
+async def completions(
+    data: CompletionRequest, request: Request, response: Response
+) -> StreamingResponse | CompletionResponse | OpenAIErrorResponse:
+    with request.app.state.lock:
+        try:
+
+            stream = data.stream
+            model = data.model if data.model else request.app.state.model_name
+
+            prompt = data.prompt
+
+            prompt = prompt.strip()
+
+            async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
+
+                prompt_tokens = num_tokens_from_string(prompt)
+                completion_tokens = 0
+                rkllm_output = ""
+
+                async for new_text in gov.stream_generate(prompt):
+                    if type(new_text) is int:
+                        completion_tokens = new_text
+                        continue
+
+                    rkllm_output += new_text
+
+                    if stream:
+                        _res = CompletionResponse(id=f"chatcmpl-{time()}",
+                                                  object="completion.chunk",
+                                                  created=int(time()),
+                                                  model=model,
+                                                  choices=[{
+                                                      "index":
+                                                      0,
+                                                      "text":
+                                                      rkllm_output,
+                                                      "finish_reason":
+                                                      None
+                                                  }])
+
+                        yield f"data: {_res.model_dump_json()}\n\n"
+
+                    if await request.is_disconnected(
+                    ):  # await request.is_disconnected():
+                        break
+
+                if stream:
+                    final_response = CompletionResponse(
+                        **{
+                            "id": f"chatcmpl-{time()}",
+                            "object": "completion.chunk",
+                            "created": int(time()),
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "text": ""
+                            }]
+                        })
+                    yield f"data: {final_response.model_dump_json()}\n\n"
+                    yield "data: [DONE]\n\n"
+                else:
+                    yield CompletionResponse(
+                        **{
+                            "id":
+                            f"chatcmpl-{time()}",
+                            "object":
+                            "completion",
+                            "created":
+                            int(time()),
+                            "model":
+                            model,
+                            "choices": [{
+                                "index": 0,
+                                "text": rkllm_output,
+                                "finish_reason": "stop",
+                            }],
+                            "usage": {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens +
+                                completion_tokens,
+                            },
+                        })
+
+            if stream:
+                return StreamingResponse(generate(
+                    prompt, request.app.state.governor_engine),
+                                         media_type='text/event-stream')
+            else:
+                return await anext(
+                    generate(prompt, request.app.state.governor_engine))
+        except Exception as e:
+            logging.error(e)
+            return OpenAIErrorResponse(
+                error=OpenAIErrorDetail(message=str(e), type="server_error"))
 
 
 @router.get('/models')
@@ -149,12 +244,14 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
         # Creiamo la lista di embeddings con indice
         try:
             embedding_list = [
-                EmbeddingData(object="embedding",
-                              embedding=get_sentence_embedding(hidden_states=(await request.app.state.governor_engine.hidden_layer(_r)).hidden_layer,
-                                  logits_aw=None,#_emb_logit[0].logits,
-                                  emb_type="mean"),
-                              index=i)
-                for i, _r in enumerate(ebm_request.input)
+                EmbeddingData(
+                    object="embedding",
+                    embedding=get_sentence_embedding(
+                        hidden_states=(await request.app.state.governor_engine.
+                                       hidden_layer(_r)).hidden_layer,
+                        logits_aw=None,  #_emb_logit[0].logits,
+                        emb_type="mean"),
+                    index=i) for i, _r in enumerate(ebm_request.input)
             ]
         except Exception as e:
             logging.error(e)

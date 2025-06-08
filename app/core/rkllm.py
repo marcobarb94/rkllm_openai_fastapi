@@ -46,7 +46,8 @@ is_blocking = False
 # Define global variables to store the callback function output for displaying in the Gradio interface
 result_queue = multiprocessing.Queue()
 control_queue = multiprocessing.Queue()
-cmd_queue: 'multiprocessing.Queue[EngineComunication]' = multiprocessing.Queue()
+cmd_queue: 'multiprocessing.Queue[EngineComunication]' = multiprocessing.Queue(
+)
 global_state = -1
 split_byte_data = bytes(b"")  # Used to store the segmented byte data
 
@@ -107,8 +108,9 @@ callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult),
                                  ctypes.c_void_p, ctypes.c_int)
 callback = callback_type(callback_impl)
 
-DEFAULT_PROMPT_TEXT_PREFIX = "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
+DEFAULT_PROMPT_TEXT_PREFIX = "<|im_start|>user"
 DEFAULT_PROMPT_TEXT_POSTFIX = "<|im_end|><|im_start|>assistant"
+DEFAULT_SYSTEM_PROMPT = "<|im_start|>system You are a helpful assistant. <|im_end|>"
 
 
 # Define the RKLLM class, which includes initialization, inference, and release operations for the RKLLM model in the dynamic library
@@ -118,8 +120,10 @@ class RKLLM(object):
                  model_path: str,
                  lora_model_path: Optional[str] = None,
                  prompt_cache_path: Optional[str] = None,
+                 set_chat_template: bool = False,
                  prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
                  prompt_text_postfix: str = DEFAULT_PROMPT_TEXT_POSTFIX,
+                 system_prompt: str = DEFAULT_SYSTEM_PROMPT,
                  llm_params: Optional[LLMParams] = None):
         rkllm_param = RKLLMParam()
         if llm_params is None:
@@ -140,7 +144,7 @@ class RKLLM(object):
         rkllm_param.mirostat_eta = llm_params.mirostat_eta
         rkllm_param.logprobs = llm_params.logprobs
         rkllm_param.top_logprobs = llm_params.top_logprobs
-        rkllm_param.use_gpu = True
+        # rkllm_param.use_gpu = True
         rkllm_param.is_async = False
         rkllm_param.img_start = "".encode('utf-8')
         rkllm_param.img_end = "".encode('utf-8')
@@ -176,10 +180,12 @@ class RKLLM(object):
         ]
         self.set_chat_template.restype = ctypes.c_int
 
-        system_prompt = "<|im_start|>system You are a helpful assistant. <|im_end|>"
-        prompt_prefix = "<|im_start|>user"
-        prompt_postfix = "<|im_end|><|im_start|>assistant"
-        # self.set_chat_template(self.handle, ctypes.c_char_p(system_prompt.encode('utf-8')), ctypes.c_char_p(prompt_prefix.encode('utf-8')), ctypes.c_char_p(prompt_postfix.encode('utf-8')))
+        if set_chat_template:
+            _res = self.set_chat_template(
+                self.handle, ctypes.c_char_p(system_prompt.encode('utf-8')),
+                ctypes.c_char_p(prompt_text_prefix.encode('utf-8')),
+                ctypes.c_char_p(prompt_text_postfix.encode('utf-8')))
+            logging.info(f"Set Chat Template: {_res}")
 
         self.rkllm_destroy = rkllm_lib.rkllm_destroy
         self.rkllm_destroy.argtypes = [RKLLM_Handle_t]

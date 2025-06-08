@@ -1,3 +1,4 @@
+import logging
 from typing import Collection, List, Literal, Optional, Self
 import tiktoken
 from jinja2 import Template
@@ -11,12 +12,19 @@ def num_tokens_from_string(string: str,
     return len(encoding.encode(string, allowed_special={"<|endoftext|>"}))
 
 
+def raise_exception(nome):
+    logging.error(f"Template error {nome}")
+    return f"\nScrivi all'utente che c'è questo errore: {nome}!\n"
+
+
 def parse_message_to_prompt(messages: List[str],
                             tokenizer_config: dict) -> str:
 
     ct = tokenizer_config['chat_template']
     template = Template(ct)
-    return template.render(messages=messages)
+    return template.render(**tokenizer_config,
+                           messages=messages,
+                           raise_exception=raise_exception)
 
 
 class EmbeddingsLLMData:

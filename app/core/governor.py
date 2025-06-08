@@ -26,6 +26,10 @@ class Governor:
         async with self.lock:
             try:
                 self.cmd_queue.put(
+                    EngineComunication(function_name="abort_job",
+                                       params={
+                                       }))
+                self.cmd_queue.put(
                     EngineComunication(function_name="run",
                                        params={
                                            "infer_type": "generate",

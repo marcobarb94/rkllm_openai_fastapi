@@ -18,6 +18,7 @@ class RKLLM_Engine:
     def worker_func(self):
         # Esegue eventuali inizializzazioni della libreria se necessario
         self.engine = RKLLM(**self.engine_params)
+        logging.info("Loaded")
         while True:
             cmd = self.cmd_queue.get()  # Bloccante finché non arriva un comando
             if cmd == "STOP":
