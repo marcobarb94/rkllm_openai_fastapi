@@ -80,7 +80,8 @@ def chat_completions(
                     model_thread.join(timeout=0.005)
                     model_thread_finished = not model_thread.is_alive()
                     if request._is_disconnected:  # await request.is_disconnected():
-                        logging.info(f"User Stops {request.app.state.rkllm_model.abort_job}")
+                        logging.info(f"User Stops {request.app.state.rkllm_model.abort_job()}")
+                        model_thread_finished = True
                         
                 if stream:
                     final_response = ChatCompletionChunk(
