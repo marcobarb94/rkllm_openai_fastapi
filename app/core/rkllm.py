@@ -177,6 +177,14 @@ class RKLLM(object):
         self.rkllm_destroy.argtypes = [RKLLM_Handle_t]
         self.rkllm_destroy.restype = ctypes.c_int
 
+        self.rkllm_abort = rkllm_lib.rkllm_abort
+        self.rkllm_abort.argtypes = [RKLLM_Handle_t]
+        self.rkllm_abort.restype = ctypes.c_int
+
+        self.rkllm_is_running = rkllm_lib.rkllm_is_running
+        self.rkllm_is_running.argtypes = [RKLLM_Handle_t]
+        self.rkllm_is_running.restype = ctypes.c_int
+
         rkllm_lora_params = None
         if lora_model_path:
             lora_adapter_name = "test"
@@ -244,3 +252,9 @@ class RKLLM(object):
 
     def release(self):
         self.rkllm_destroy(self.handle)
+
+    def abort_job(self)->bool:
+        return self.rkllm_abort(self.handle) == 0
+
+    def is_running(self)->bool:
+        return self.rkllm_is_running(self.handle) == 0

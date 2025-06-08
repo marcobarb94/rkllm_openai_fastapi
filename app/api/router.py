@@ -21,7 +21,7 @@ def chat_completions(
 ) -> StreamingResponse | ChatCompletionResponse | OpenAIErrorResponse:
     global global_text, global_state
 
-    if request.app.state.lock.locked():
+    if False: # request.app.state.lock.locked():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return OpenAIErrorResponse(error=OpenAIErrorDetail(
             message="Server RKLLM is busy! Please try again later.",
@@ -80,8 +80,8 @@ def chat_completions(
                     model_thread.join(timeout=0.005)
                     model_thread_finished = not model_thread.is_alive()
                     if request._is_disconnected:  # await request.is_disconnected():
-                        logging.info("User Stops")
-
+                        logging.info(f"User Stops {request.app.state.rkllm_model.abort_job}")
+                        
                 if stream:
                     final_response = ChatCompletionChunk(
                         **{
