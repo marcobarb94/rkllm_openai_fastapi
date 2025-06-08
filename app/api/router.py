@@ -7,21 +7,22 @@ from typing import *
 from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from core.embeddings import generate_embeddings
+from core.embeddings import generate_embeddings, get_sentence_embedding
 from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, EmbeddingData, EmbeddingRequest, EmbeddingResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
+from core.governor import Governor
 from core.util import num_tokens_from_string, parse_message_to_prompt
-from core.rkllm import global_text, global_state
+from core.rkllm import result_queue, global_state
 
 router = APIRouter(prefix="/v1")
 
 
 @router.post('/chat/completions', response_model=None)
-def chat_completions(
+async def chat_completions(
     data: ChatCompletionRequest, request: Request, response: Response
 ) -> StreamingResponse | ChatCompletionResponse | OpenAIErrorResponse:
-    global global_text, global_state
+    global result_queue, global_state
 
-    if False: # request.app.state.lock.locked():
+    if False:  # request.app.state.lock.locked():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return OpenAIErrorResponse(error=OpenAIErrorDetail(
             message="Server RKLLM is busy! Please try again later.",
@@ -29,9 +30,6 @@ def chat_completions(
 
     with request.app.state.lock:
         try:
-
-            global_text._init(4096)
-            global_state = -1
 
             stream = data.stream
             model = data.model if data.model else request.app.state.model_name
@@ -41,48 +39,38 @@ def chat_completions(
 
             prompt = prompt.strip()
 
-            def generate() -> Generator:
-                nonlocal prompt
-                rkllm_output = ""
+            async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
+
                 prompt_tokens = num_tokens_from_string(prompt)
                 completion_tokens = 0
+                rkllm_output = ""
 
-                model_thread = threading.Thread(
-                    target=request.app.state.rkllm_model.run, args=(prompt, ))
-                model_thread.start()
+                async for new_text in gov.stream_generate(prompt):
+                    if type(new_text) is int:
+                        completion_tokens = new_text
+                        continue
 
-                model_thread_finished = False
+                    rkllm_output += new_text
 
-                while not model_thread_finished:
-                    sleep(0.005)
-                    while not global_text.empty():
-                        new_text = global_text.get()
-                        rkllm_output += new_text
-                        completion_tokens += num_tokens_from_string(new_text)
+                    if stream:
+                        _res = ChatCompletionChunk(
+                            id=f"chatcmpl-{time()}",
+                            object="chat.completion.chunk",
+                            created=int(time()),
+                            model=model,
+                            choices=[{
+                                "index": 0,
+                                "delta": {
+                                    "content": new_text
+                                },
+                                "finish_reason": None
+                            }])
 
-                        if stream:
-                            _res = ChatCompletionChunk(
-                                id=f"chatcmpl-{time()}",
-                                object="chat.completion.chunk",
-                                created=int(time()),
-                                model=model,
-                                choices=[{
-                                    "index": 0,
-                                    "delta": {
-                                        "content": new_text
-                                    },
-                                    "finish_reason": None
-                                }])
+                        yield f"data: {_res.model_dump_json()}\n\n"
 
-                            yield f"data: {_res.model_dump_json()}\n\n"
-                        sleep(0.005)
-
-                    model_thread.join(timeout=0.005)
-                    model_thread_finished = not model_thread.is_alive()
                     if request._is_disconnected:  # await request.is_disconnected():
-                        logging.info(f"User Stops {request.app.state.rkllm_model.abort_job()}")
-                        model_thread_finished = True
-                        
+                        break
+
                 if stream:
                     final_response = ChatCompletionChunk(
                         **{
@@ -130,10 +118,10 @@ def chat_completions(
                         })
 
             if stream:
-                return StreamingResponse(generate(),
+                return StreamingResponse(generate(prompt,request.app.state.governor_engine),
                                          media_type='text/event-stream')
             else:
-                return next(generate())
+                return await anext(generate(prompt,request.app.state.governor_engine))
         except Exception as e:
             logging.error(e)
             return OpenAIErrorResponse(
@@ -148,7 +136,7 @@ def chat_completions(
 
 
 @router.get('/models')
-def get_models(request: Request) -> ModelsResponse:
+async def get_models(request: Request) -> ModelsResponse:
     return ModelsResponse(
         object="list",
         data=[Model(id=request.app.state.model_name, object="model")])
@@ -162,10 +150,9 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
         try:
             embedding_list = [
                 EmbeddingData(object="embedding",
-                              embedding=await asyncio.to_thread(
-                                  generate_embeddings,
-                                  text=_r,
-                                  rkllm_model=request.app.state.rkllm_model),
+                              embedding=get_sentence_embedding(hidden_states=(await request.app.state.governor_engine.hidden_layer(_r)).hidden_layer,
+                                  logits_aw=None,#_emb_logit[0].logits,
+                                  emb_type="mean"),
                               index=i)
                 for i, _r in enumerate(ebm_request.input)
             ]

@@ -1,10 +1,11 @@
 import ctypes
+import multiprocessing
 import sys
 import queue
 import threading
 import logging
 
-from typing import Any, Collection, Literal, Optional
+from typing import Any, Collection, Literal, Optional, Tuple
 
 from core.util import EmbeddingsLLMData
 from core.entities_llm import *
@@ -43,7 +44,9 @@ lock = threading.Lock()
 is_blocking = False
 
 # Define global variables to store the callback function output for displaying in the Gradio interface
-global_text = queue.Queue()
+result_queue = multiprocessing.Queue()
+control_queue = multiprocessing.Queue()
+cmd_queue: 'multiprocessing.Queue[EngineComunication]' = multiprocessing.Queue()
 global_state = -1
 split_byte_data = bytes(b"")  # Used to store the segmented byte data
 
@@ -61,11 +64,13 @@ def pointer_to_pyth_float(
 
 # Define the callback function
 def callback_impl(result, userdata, state):
-    global global_text, global_state, split_byte_data
+    global result_queue, global_state
     if state == LLMCallState.RKLLM_RUN_FINISH:
         global_state = state
+        result_queue.put(True)
     elif state == LLMCallState.RKLLM_RUN_ERROR:
         global_state = state
+        result_queue.put(False)
         logging.error("run error")
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
@@ -81,17 +86,20 @@ def callback_impl(result, userdata, state):
                 pointer=last_hidden_layer_res.hidden_states,
                 len_data=last_hidden_layer_res.embd_size *
                 last_hidden_layer_res.num_tokens)
-            global_text.put(
-                EmbeddingsLLMData(emb_vocab_size=last_hidden_layer_res.embd_size,
-                                  hidden_layer=float_array))
+            result_queue.put(
+                EmbeddingsLLMData(
+                    emb_vocab_size=last_hidden_layer_res.embd_size,
+                    hidden_layer=float_array))
         elif logits_res.vocab_size != 0 and logits_res.num_tokens != 0:
             float_array = pointer_to_pyth_float(
                 pointer=logits_res.logits,
                 len_data=logits_res.vocab_size * logits_res.num_tokens)
-            global_text.put(EmbeddingsLLMData(logits=float_array,emb_vocab_size=logits_res.vocab_size))
+            result_queue.put(
+                EmbeddingsLLMData(logits=float_array,
+                                  emb_vocab_size=logits_res.vocab_size))
             print(result.contents.text.decode('utf-8'))
         else:
-            global_text.put(result.contents.text.decode('utf-8'))
+            result_queue.put(result.contents.text.decode('utf-8'))
 
 
 # Connect the callback function between the Python side and the C++ side
@@ -232,7 +240,8 @@ class RKLLM(object):
     def run(self,
             prompt: str,
             infer_type: Literal["generate", "hidden_layer",
-                                "logit"] = "generate"):
+                                "logit"] = "generate",
+            userdata: Optional[UserdataCallback] = None):
         rkllm_input = RKLLMInput()
         rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
         rkllm_input.input_data.prompt_input = ctypes.c_char_p(
@@ -245,16 +254,20 @@ class RKLLM(object):
                 self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER
             case "logit":
                 self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LOGITS
+        if userdata:
+            ctypes.memset(ctypes.byref(userdata), 0,
+                          ctypes.sizeof(UserdataCallback))
 
         self.rkllm_run(self.handle, ctypes.byref(rkllm_input),
-                       ctypes.byref(self.rkllm_infer_params), None)
+                       ctypes.byref(self.rkllm_infer_params),
+                       userdata if userdata else None)
         return
 
     def release(self):
         self.rkllm_destroy(self.handle)
 
-    def abort_job(self)->bool:
+    def abort_job(self) -> bool:
         return self.rkllm_abort(self.handle) == 0
 
-    def is_running(self)->bool:
+    def is_running(self) -> bool:
         return self.rkllm_is_running(self.handle) == 0

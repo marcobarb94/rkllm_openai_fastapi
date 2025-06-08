@@ -1,4 +1,5 @@
 import ctypes
+from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel
 
@@ -118,6 +119,9 @@ class RKLLMResult(ctypes.Structure):
                 ("last_hidden_layer", RKLLMResultLastHiddenLayer),
                 ("logits", RKLLMResultLogits)]
 
+class UserdataCallback(ctypes.Structure):
+    _fields_ = [("id", ctypes.c_int)]
+
 
 class LLMParams(BaseModel):
     max_context_len: int = 4096
@@ -133,3 +137,7 @@ class LLMParams(BaseModel):
     mirostat_eta: float = 0.1
     logprobs: bool = False
     top_logprobs: int = 5
+
+class EngineComunication(BaseModel):
+    function_name: Literal["run","abort_job","is_running"]
+    params: Dict[str,Any]

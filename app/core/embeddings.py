@@ -4,7 +4,7 @@ from time import sleep
 from typing import Collection, Generator, List, Literal, Optional
 import numpy as np
 from core.util import EmbeddingsLLMData
-from core.rkllm import global_text, global_state
+from core.rkllm import result_queue, global_state
 
 
 def get_sentence_embedding(hidden_states: np.ndarray[float, float],
@@ -47,20 +47,20 @@ def softmax(x):
 
 
 def generate_embeddings(text: str, rkllm_model: ' core.rkllm.RKLLM', emb_type: str = "mean") -> np.array:
-    global global_text, global_state
+    global result_queue, global_state
 
     prompt = text.strip()
 
-    global_text._init(2)
+    result_queue._init(2)
     global_state = -1
     model_thread_hl = threading.Thread(target=rkllm_model.run,
                                        args=(prompt, "hidden_layer"))
     model_thread_hl.start()
-    _emb_hidden: EmbeddingsLLMData = global_text.get()
+    _emb_hidden: EmbeddingsLLMData = result_queue.get()
     model_thread_hl.join(timeout=None)
 
     if False:
-        global_text._init(2000)
+        result_queue._init(2000)
         global_state = -1
         model_thread_logit = threading.Thread(target=rkllm_model.run,
                                             args=(prompt, "logit"))
@@ -71,8 +71,8 @@ def generate_embeddings(text: str, rkllm_model: ' core.rkllm.RKLLM', emb_type: s
         model_thread_finished = False
         while not model_thread_finished:
             sleep(0.01)
-            while not global_text.empty():
-                new_embd = global_text.get()
+            while not result_queue.empty():
+                new_embd = result_queue.get()
                 _emb_logit.append(new_embd)
 
             model_thread_logit.join(timeout=0.005)
