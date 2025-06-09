@@ -12,6 +12,7 @@ from core.process import RKLLM_Engine
 from core.entities_llm import LLMParams
 from core.rkllm import control_queue, cmd_queue, result_queue
 from api.router import router
+import logging
 
 resource.setrlimit(resource.RLIMIT_NOFILE, (102400, 102400))
 
@@ -46,11 +47,17 @@ async def lifespan(app: FastAPI):
                                          cmd_queue=cmd_queue,
                                          result_queue=result_queue)
     yield
+    logging.info("Stop")
     # Clean up the ML models and release the resources
     cmd_queue.put("STOP")
-    await sleep(1000)
+    logging.info("-")
+    await sleep(3)
+    print("Shutting down")
+    result_queue.close()
+    logging.info("aleep")
     process.terminate()
-    process.join(timeout=5)
+    logging.info("Terminate")
+    #process.join(timeout=5)
     process.kill()
 
 

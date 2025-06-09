@@ -55,3 +55,5 @@ class RKLLM_Engine:
                 })
 
         self.engine.release()
+        self.cmd_queue.close()
+        self.control_queue.close()
