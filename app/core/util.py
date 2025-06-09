@@ -18,10 +18,11 @@ def raise_exception(nome):
 
 
 def parse_message_to_prompt(messages: List[str],
-                            tokenizer_config: dict) -> str:
+                            tokenizer_config: dict, enable_thinking: bool = False) -> str:
 
     ct = tokenizer_config['chat_template']
     template = Template(ct)
+    tokenizer_config['enable_thinking'] = enable_thinking
     return template.render(**tokenizer_config,
                            messages=messages,
                            raise_exception=raise_exception)

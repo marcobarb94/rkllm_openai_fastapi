@@ -7,12 +7,12 @@ from core.rkllm import RKLLM, global_state
 
 class RKLLM_Engine:
 
-    def __init__(self, engine_params: Dict[str,Any],
+    def __init__(self, engine_params: Dict[str, Any],
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
                  control_queue: multiprocessing.Queue):
         self.cmd_queue = cmd_queue
         self.control_queue = control_queue
-        self.engine_params=engine_params
+        self.engine_params = engine_params
         pass
 
     def worker_func(self):
@@ -20,7 +20,8 @@ class RKLLM_Engine:
         self.engine = RKLLM(**self.engine_params)
         logging.info("Loaded")
         while True:
-            cmd = self.cmd_queue.get()  # Bloccante finché non arriva un comando
+            cmd = self.cmd_queue.get(
+            )  # Bloccante finché non arriva un comando
             if cmd == "STOP":
                 # Segnale per terminare il processo
                 break
@@ -30,7 +31,10 @@ class RKLLM_Engine:
                     case "run":
                         self.engine.run(**cmd.params)
                     case "abort_job":
-                        _res = self.engine.abort_job(**cmd.params)
+                        if self.engine.is_running(**cmd.params) == 0:
+                            _res = self.engine.abort_job(**cmd.params)
+                        else:
+                            _res = -1
                         self.control_queue.put({
                             "fun": cmd.function_name,
                             "res": _res

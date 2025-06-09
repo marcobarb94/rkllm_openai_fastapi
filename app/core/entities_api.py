@@ -1,6 +1,9 @@
-from typing import List, Optional, Dict, Any, Union
+from time import time
+from typing import List, Literal, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from enum import StrEnum
+
+from core.entities_llm import LLMParams
 
 
 class OpenAIRoles(StrEnum):
@@ -66,7 +69,7 @@ class CompletionChoice(BaseModel):
     index: int = Field(..., description="Indice della scelta nella lista")
     logprobs: Optional[Dict[str, Any]] = Field(
         None, description="Informazioni sui log probabilities se richiesto")
-    finish_reason: Optional[str] = Field(
+    finish_reason: Optional[Literal["stop", "length"]] = Field(
         None,
         description=
         "Motivo per cui la generazione si è fermata, ad esempio 'stop', 'length', ecc."
@@ -83,8 +86,9 @@ class CompletionUsage(BaseModel):
 class CompletionResponse(BaseModel):
     id: str = Field(..., description="Identificativo univoco della richiesta")
     object: str = Field(
-        ..., description="Tipo di oggetto restituito, es. 'text_completion'")
-    created: int = Field(...,
+        default="text_completion",
+        description="Tipo di oggetto restituito, es. 'text_completion'")
+    created: int = Field(default_factory=time,
                          description="Timestamp di creazione della risposta")
     model: str = Field(
         ..., description="Modello utilizzato per generare la risposta")
@@ -121,7 +125,7 @@ class ChatCompletionResponse(BaseModel):
     id: str = Field(..., description="Identificativo univoco della risposta")
     object: str = Field(
         ..., description="Tipo di oggetto restituito, es. 'chat.completion'")
-    created: int = Field(...,
+    created: int = Field(default_factory=time,
                          description="Timestamp di creazione della risposta")
     model: str = Field(
         ..., description="Modello utilizzato per generare la risposta")
@@ -155,7 +159,8 @@ class ChatCompletionChunk(BaseModel):
         ...,
         description="Di solito 'chat.completion.chunk' per i chunk in streaming"
     )
-    created: int = Field(..., description="Timestamp di creazione del chunk")
+    created: int = Field(default_factory=time,
+                         description="Timestamp di creazione del chunk")
     model: str = Field(
         ..., description="Modello utilizzato per generare la risposta")
     choices: List[ChatStreamChoice] = Field(
@@ -186,10 +191,12 @@ class ModelsResponse(BaseModel):
         ..., description="Tipo di oggetto della risposta (es. 'list')")
     data: List[Model] = Field(..., description="Lista dei modelli disponibili")
 
+
 # Richiesta compatibile con OpenAI
 class EmbeddingRequest(BaseModel):
     model: str
     input: List[str]
+
 
 # Oggetto singolo di embedding
 class EmbeddingData(BaseModel):
@@ -197,9 +204,17 @@ class EmbeddingData(BaseModel):
     embedding: List[float]
     index: int
 
+
 # Risposta compatibile con OpenAI
 class EmbeddingResponse(BaseModel):
     object: str = "list"
     data: List[EmbeddingData]
     model: str
     usage: dict  # Opzionale, per monitorare token usati
+
+
+class AppConfig(BaseModel):
+    model_path: str
+    llm_params: LLMParams = Field(default={})
+    path_tokenizer_config: str
+    has_thinking: bool = Field(default=False)

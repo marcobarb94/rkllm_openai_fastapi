@@ -119,6 +119,7 @@ class RKLLMResult(ctypes.Structure):
                 ("last_hidden_layer", RKLLMResultLastHiddenLayer),
                 ("logits", RKLLMResultLogits)]
 
+
 class UserdataCallback(ctypes.Structure):
     _fields_ = [("id", ctypes.c_int)]
 
@@ -138,6 +139,7 @@ class LLMParams(BaseModel):
     logprobs: bool = False
     top_logprobs: int = 5
 
+
 class EngineComunication(BaseModel):
-    function_name: Literal["run","abort_job","is_running"]
-    params: Dict[str,Any]
+    function_name: Literal["run", "abort_job", "is_running"]
+    params: Dict[str, Any]

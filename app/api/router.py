@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.embeddings import generate_embeddings, get_sentence_embedding
-from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionRequest, ChatCompletionResponse, CompletionResponse, EmbeddingData, EmbeddingRequest, EmbeddingResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
+from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionChoice, CompletionRequest, ChatCompletionResponse, CompletionResponse, EmbeddingData, EmbeddingRequest, EmbeddingResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
 from core.governor import Governor
 from core.util import num_tokens_from_string, parse_message_to_prompt
 from core.rkllm import result_queue, global_state
@@ -32,10 +32,13 @@ async def chat_completions(
         try:
 
             stream = data.stream
-            model = data.model if data.model else request.app.state.model_name
+            model = data.model if data.model else request.app.state.model_name[
+                0]
 
             prompt = parse_message_to_prompt(
-                data.messages, request.app.state.tokenizer_config)
+                data.messages,
+                request.app.state.tokenizer_config,
+                enable_thinking=model.endswith("reasoning"))
 
             prompt = prompt.strip()
 
@@ -74,49 +77,37 @@ async def chat_completions(
 
                 if stream:
                     final_response = ChatCompletionChunk(
-                        **{
-                            "id":
-                            f"chatcmpl-{time()}",
-                            "object":
-                            "chat.completion.chunk",
-                            "created":
-                            int(time()),
-                            "model":
-                            model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": "stop"
-                            }]
-                        })
+                        id=f"chatcmpl-{time()}",
+                        object="chat.completion.chunk",
+                        created=int(time()),
+                        model=model,
+                        choices=[{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }])
                     yield f"data: {final_response.model_dump_json()}\n\n"
                     yield "data: [DONE]\n\n"
                 else:
                     yield ChatCompletionResponse(
-                        **{
-                            "id":
-                            f"chatcmpl-{time()}",
-                            "object":
-                            "chat.completion",
-                            "created":
-                            int(time()),
-                            "model":
-                            model,
-                            "choices": [{
-                                "index": 0,
-                                "message": {
-                                    "role": "assistant",
-                                    "content": rkllm_output,
-                                },
-                                "finish_reason": "stop",
-                            }],
-                            "usage": {
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens,
-                                "total_tokens": prompt_tokens +
-                                completion_tokens,
+                        id=f"chatcmpl-{time()}",
+                        object="chat.completion",
+                        created=int(time()),
+                        model=model,
+                        choices=[{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": rkllm_output,
                             },
-                        })
+                            "finish_reason": "stop",
+                        }],
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens,
+                        },
+                    )
 
             if stream:
                 return StreamingResponse(generate(
@@ -150,6 +141,8 @@ async def completions(
                 prompt_tokens = num_tokens_from_string(prompt)
                 completion_tokens = 0
                 rkllm_output = ""
+                _in = 0
+                _response_id = f"cmpl-{time()}"
 
                 async for new_text in gov.stream_generate(prompt):
                     if type(new_text) is int:
@@ -159,18 +152,11 @@ async def completions(
                     rkllm_output += new_text
 
                     if stream:
-                        _res = CompletionResponse(id=f"chatcmpl-{time()}",
-                                                  object="completion.chunk",
+                        _in += 1
+                        _res = CompletionResponse(id=_response_id,
                                                   created=int(time()),
                                                   model=model,
-                                                  choices=[{
-                                                      "index":
-                                                      0,
-                                                      "text":
-                                                      rkllm_output,
-                                                      "finish_reason":
-                                                      None
-                                                  }])
+                                                  choices=[CompletionChoice(index=_in, text=new_text)])
 
                         yield f"data: {_res.model_dump_json()}\n\n"
 
@@ -180,42 +166,32 @@ async def completions(
 
                 if stream:
                     final_response = CompletionResponse(
-                        **{
-                            "id": f"chatcmpl-{time()}",
-                            "object": "completion.chunk",
-                            "created": int(time()),
-                            "model": model,
-                            "choices": [{
-                                "index": 0,
-                                "finish_reason": "stop",
-                                "text": ""
-                            }]
-                        })
+                        id=_response_id,
+                        created=int(time()),
+                        model=model,
+                        choices=[{
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "text": ""
+                        }])
                     yield f"data: {final_response.model_dump_json()}\n\n"
                     yield "data: [DONE]\n\n"
                 else:
                     yield CompletionResponse(
-                        **{
-                            "id":
-                            f"chatcmpl-{time()}",
-                            "object":
-                            "completion",
-                            "created":
-                            int(time()),
-                            "model":
-                            model,
-                            "choices": [{
-                                "index": 0,
-                                "text": rkllm_output,
-                                "finish_reason": "stop",
-                            }],
-                            "usage": {
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens,
-                                "total_tokens": prompt_tokens +
-                                completion_tokens,
-                            },
-                        })
+                        id=_response_id,
+                        created=int(time()),
+                        model=model,
+                        choices=[{
+                            "index": 0,
+                            "text": rkllm_output,
+                            "finish_reason": "stop",
+                        }],
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens,
+                        },
+                    )
 
             if stream:
                 return StreamingResponse(generate(
@@ -232,9 +208,11 @@ async def completions(
 
 @router.get('/models')
 async def get_models(request: Request) -> ModelsResponse:
-    return ModelsResponse(
-        object="list",
-        data=[Model(id=request.app.state.model_name, object="model")])
+    return ModelsResponse(object="list",
+                          data=[
+                              Model(id=m_mod, object="model")
+                              for m_mod in request.app.state.model_name
+                          ])
 
 
 @router.post("/embeddings",
