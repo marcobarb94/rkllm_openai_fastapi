@@ -20,16 +20,55 @@ RKLLMInferMode.RKLLM_INFER_GENERATE = 0
 RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER = 1
 RKLLMInferMode.RKLLM_INFER_GET_LOGITS = 2
 
+RKLLMInputType = ctypes.c_int
+RKLLMInputType.RKLLM_INPUT_PROMPT = 0,  # < Input is a text prompt. */
+RKLLMInputType.RKLLM_INPUT_TOKEN = 1,  # < Input is a sequence of tokens. */
+RKLLMInputType.RKLLM_INPUT_EMBED = 2,  # < Input is an embedding vector. */
+RKLLMInputType.RKLLM_INPUT_MULTIMODAL = 3,  # < Input is multimodal (e.g., text and image). */
+
 
 class RKLLMExtendParam(ctypes.Structure):
+    """
+        typedef struct {
+            int32_t      base_domain_id;         # < base_domain_id */
+            int8_t       embed_flash;            # < Indicates whether to query word embedding vectors from flash memory (1) or not (0). */
+            int8_t       enabled_cpus_num;       # < Number of CPUs enabled for inference. */
+            uint32_t     enabled_cpus_mask;      # < Bitmask indicating which CPUs to enable for inference. */
+            uint8_t      n_batch;                # < Number of input samples processed concurrently in one forward pass. Set to >1 to enable batched inference. Default is 1. */
+            int8_t       use_cross_attn;         # < Whether to enable cross attention (non-zero to enable, 0 to disable). */
+            uint8_t      reserved[104];          # < reserved */
+        } RKLLMExtendParam;
+        """
     _fields_ = [("base_domain_id", ctypes.c_int32),
                 ("embed_flash", ctypes.c_int8),
                 ("enabled_cpus_num", ctypes.c_int8),
                 ("enabled_cpus_mask", ctypes.c_uint32),
-                ("reserved", ctypes.c_uint8 * 106)]
+                ("n_batch", ctypes.c_uint8), ("use_cross_attn", ctypes.c_int8),
+                ("reserved", ctypes.c_uint8 * 104)]
 
 
 class RKLLMParam(ctypes.Structure):
+    """"typedef struct {
+    const char* model_path;          # < Path to the model file. */
+    int32_t max_context_len;         # < Maximum number of tokens in the context window. */
+    int32_t max_new_tokens;          # < Maximum number of new tokens to generate. */
+    int32_t top_k;                   # < Top-K sampling parameter for token generation. */
+    int32_t n_keep;                  #  number of kv cache to keep at the beginning when shifting context window */
+    float top_p;                     # < Top-P (nucleus) sampling parameter. */
+    float temperature;               # < Sampling temperature, affecting the randomness of token selection. */
+    float repeat_penalty;            # < Penalty for repeating tokens in generation. */
+    float frequency_penalty;         # < Penalizes frequent tokens during generation. */
+    float presence_penalty;          # < Penalizes tokens based on their presence in the input. */
+    int32_t mirostat;                # < Mirostat sampling strategy flag (0 to disable). */
+    float mirostat_tau;              # < Tau parameter for Mirostat sampling. */
+    float mirostat_eta;              # < Eta parameter for Mirostat sampling. */
+    bool skip_special_token;         # < Whether to skip special tokens during generation. */
+    bool is_async;                   # < Whether to run inference asynchronously. */
+    const char* img_start;           # < Starting position of an image in multimodal input. */
+    const char* img_end;             # < Ending position of an image in multimodal input. */
+    const char* img_content;         # < Pointer to the image content. */
+    RKLLMExtendParam extend_param;  # < Extend parameters. */
+} RKLLMParam;"""
     _fields_ = [
         ("model_path", ctypes.c_char_p),
         ("max_context_len", ctypes.c_int32),
@@ -85,7 +124,23 @@ class RKLLMInputUnion(ctypes.Union):
 
 
 class RKLLMInput(ctypes.Structure):
-    _fields_ = [("input_mode", ctypes.c_int), ("input_data", RKLLMInputUnion)]
+    # _fields_ = [("input_mode", ctypes.c_int), ("input_data", RKLLMInputUnion)]
+    _fields_ = [
+        ('role', ctypes.c_char_p),  # const char*
+        ('enable_thinking', ctypes.c_bool),  # bool (C: _Bool, 1 byte)
+        ('input_type', RKLLMInputType),  # enum come int, 
+        ("input_data", RKLLMInputUnion)
+    ]
+
+
+class RKLLMCrossAttnParam(ctypes.Structure):
+    _fields_ = [
+        ('encoder_k_cache', ctypes.POINTER(ctypes.c_float)),  # float*
+        ('encoder_v_cache', ctypes.POINTER(ctypes.c_float)),  # float*
+        ('encoder_mask', ctypes.POINTER(ctypes.c_float)),  # float*
+        ('encoder_pos', ctypes.POINTER(ctypes.c_int32)),  # int32_t*
+        ('num_tokens', ctypes.c_int),  # int (usa c_int32 se l'ABI lo richiede)
+    ]
 
 
 class RKLLMLoraParam(ctypes.Structure):
@@ -114,19 +169,31 @@ class RKLLMResultLogits(ctypes.Structure):
                 ("vocab_size", ctypes.c_int), ("num_tokens", ctypes.c_int)]
 
 
+class RKLLMPerfStat(ctypes.Structure):
+    _fields_ = [
+        ('prefill_time_ms', ctypes.c_float),  # float
+        ('prefill_tokens', ctypes.c_int),  # int
+        ('generate_time_ms', ctypes.c_float),  # float
+        ('generate_tokens', ctypes.c_int),  # int
+        ('memory_usage_mb', ctypes.c_float),  # float
+    ]
+
+
 class RKLLMResult(ctypes.Structure):
     _fields_ = [("text", ctypes.c_char_p), ("token_id", ctypes.c_int),
                 ("last_hidden_layer", RKLLMResultLastHiddenLayer),
-                ("logits", RKLLMResultLogits)]
+                ("logits", RKLLMResultLogits), ('perf', RKLLMPerfStat)]
 
 
 class UserdataCallback(ctypes.Structure):
     _fields_ = [("id", ctypes.c_int)]
 
 
+# TODO: rkllm_clear_kv_cache e rkllm_get_kv_cache_size e rkllm_set_function_tools e rkllm_set_cross_attn_params
+
 class LLMParams(BaseModel):
     max_context_len: int = 4096
-    max_new_tokens: int = 1024
+    max_new_tokens: int = 2048
     top_k: int = 1
     top_p: float = 0.9
     temperature: float = 0.8

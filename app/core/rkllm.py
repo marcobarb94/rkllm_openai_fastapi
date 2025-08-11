@@ -100,10 +100,15 @@ def callback_impl(result, userdata, state):
                                   emb_vocab_size=logits_res.vocab_size))
             print(result.contents.text.decode('utf-8'))
         else:
-            result_queue.put(result.contents.text.decode('utf-8'))
+            _data = result.contents.text
+            result_queue.put("" if _data is None else _data.decode('utf-8'))
 
 
 # Connect the callback function between the Python side and the C++ side
+# @return int Return value indicating the handling status:
+#  *         - 0: Continue inference normally.
+#  *         - 1: Pause inference. If the user wants to modify or intervene in the result (e.g., editing output, injecting new prompt),
+#  *              return 1 to suspend the current inference. Later, call `rkllm_run` with updated content to resume inference.
 callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult),
                                  ctypes.c_void_p, ctypes.c_int)
 callback = callback_type(callback_impl)
@@ -247,9 +252,14 @@ class RKLLM(object):
             prompt: str,
             infer_type: Literal["generate", "hidden_layer",
                                 "logit"] = "generate",
-            userdata: Optional[UserdataCallback] = None):
+            userdata: Optional[UserdataCallback] = None,
+            role: str = 'user',
+            enable_thinking: bool = False):
         rkllm_input = RKLLMInput()
         rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
+        rkllm_input.role = role.encode(
+            'utf-8') if role is not None else "user".encode('utf-8')
+        rkllm_input.enable_thinking = ctypes.c_bool(enable_thinking)
         rkllm_input.input_data.prompt_input = ctypes.c_char_p(
             prompt.encode('utf-8'))
 
