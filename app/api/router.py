@@ -38,7 +38,8 @@ async def chat_completions(
             prompt = parse_message_to_prompt(
                 data.messages,
                 request.app.state.tokenizer_config,
-                enable_thinking=model.endswith("reasoning"))
+                enable_thinking=(enable_thinking :=
+                                 model.endswith("reasoning")))
 
             prompt = prompt.strip()
 
@@ -48,7 +49,8 @@ async def chat_completions(
                 completion_tokens = 0
                 rkllm_output = ""
 
-                async for new_text in gov.stream_generate(prompt):
+                async for new_text in gov.stream_generate(
+                        prompt, enable_thinking=enable_thinking):
                     if type(new_text) is int:
                         completion_tokens = new_text
                         continue
@@ -156,7 +158,11 @@ async def completions(
                         _res = CompletionResponse(id=_response_id,
                                                   created=int(time()),
                                                   model=model,
-                                                  choices=[CompletionChoice(index=_in, text=new_text)])
+                                                  choices=[
+                                                      CompletionChoice(
+                                                          index=_in,
+                                                          text=new_text)
+                                                  ])
 
                         yield f"data: {_res.model_dump_json()}\n\n"
 
@@ -165,15 +171,17 @@ async def completions(
                         break
 
                 if stream:
-                    final_response = CompletionResponse(
-                        id=_response_id,
-                        created=int(time()),
-                        model=model,
-                        choices=[{
-                            "index": 0,
-                            "finish_reason": "stop",
-                            "text": ""
-                        }])
+                    final_response = CompletionResponse(id=_response_id,
+                                                        created=int(time()),
+                                                        model=model,
+                                                        choices=[{
+                                                            "index":
+                                                            0,
+                                                            "finish_reason":
+                                                            "stop",
+                                                            "text":
+                                                            ""
+                                                        }])
                     yield f"data: {final_response.model_dump_json()}\n\n"
                     yield "data: [DONE]\n\n"
                 else:

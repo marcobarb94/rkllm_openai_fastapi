@@ -20,20 +20,21 @@ class Governor:
         self.control_queue = control_queue
         self.result_queue = result_queue
 
-    async def stream_generate(self,
-                              prompt: str) -> AsyncGenerator[str, str | int]:
+    async def stream_generate(
+            self,
+            prompt: str,
+            enable_thinking: bool = False) -> AsyncGenerator[str, str | int]:
         # bloccante fino a quando non sono finiti i job
         async with self.lock:
             try:
                 self.cmd_queue.put(
-                    EngineComunication(function_name="abort_job",
-                                       params={
-                                       }))
+                    EngineComunication(function_name="abort_job", params={}))
                 self.cmd_queue.put(
                     EngineComunication(function_name="run",
                                        params={
                                            "infer_type": "generate",
-                                           "prompt": prompt
+                                           "prompt": prompt,
+                                           "enable_thinking": enable_thinking
                                        }))
                 model_thread_finished = False
                 self.result_queue._reset()
@@ -41,7 +42,7 @@ class Governor:
                 while not model_thread_finished:
                     await sleep(0.005)
                     while not self.result_queue.empty():
-                        new_text = self.result_queue.get(timeout=10)
+                        new_text = self.result_queue.get(timeout=25)
                         if new_text is None:
                             break
                         if type(new_text) is bool:

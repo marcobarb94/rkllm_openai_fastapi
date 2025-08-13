@@ -159,6 +159,9 @@ class RKLLM(object):
         rkllm_param.extend_param.enabled_cpus_num = 4
         rkllm_param.extend_param.enabled_cpus_mask = (1 << 4) | (1 << 5) | (
             1 << 6) | (1 << 7)
+        
+        rkllm_param.extend_param.n_batch = 1
+        rkllm_param.extend_param.use_cross_attn = 0 # metto zero o esplode la ram
 
         self.handle = RKLLM_Handle_t()
 
