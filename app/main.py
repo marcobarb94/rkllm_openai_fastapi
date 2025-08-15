@@ -1,4 +1,5 @@
 from asyncio import sleep
+import asyncio
 from contextlib import asynccontextmanager
 import json
 import multiprocessing
@@ -25,7 +26,7 @@ async def lifespan(app: FastAPI):
         FileNotFoundError(f"Model not Found: {config.model_path}")
 
     # Load the ML model
-    app.state.lock = threading.Lock()
+    app.state.lock = asyncio.Lock()
     rkllm_model = RKLLM_Engine(
         {
             "model_path": config.model_path,

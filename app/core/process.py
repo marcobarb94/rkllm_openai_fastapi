@@ -31,7 +31,7 @@ class RKLLM_Engine:
                     case "run":
                         self.engine.run(**cmd.params)
                     case "abort_job":
-                        if self.engine.is_running(**cmd.params) == 0:
+                        if self.engine.is_running(**cmd.params):
                             _res = self.engine.abort_job(**cmd.params)
                         else:
                             _res = -1

@@ -1,5 +1,6 @@
 from asyncio import sleep
 import multiprocessing
+from queue import Empty
 from typing import AsyncGenerator, Tuple
 from asyncio import Lock
 from core.entities_llm import EngineComunication
@@ -29,6 +30,13 @@ class Governor:
             try:
                 self.cmd_queue.put(
                     EngineComunication(function_name="abort_job", params={}))
+                self.result_queue._reset()
+                try:
+                    while True:
+                        self.result_queue.get_nowait() # stop cross talk
+                except Empty:
+                    pass
+                self.result_queue._reset()
                 self.cmd_queue.put(
                     EngineComunication(function_name="run",
                                        params={
@@ -37,7 +45,6 @@ class Governor:
                                            "enable_thinking": enable_thinking
                                        }))
                 model_thread_finished = False
-                self.result_queue._reset()
                 completion_tokens = 0
                 while not model_thread_finished:
                     await sleep(0.005)

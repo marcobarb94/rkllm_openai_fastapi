@@ -27,8 +27,10 @@ async def chat_completions(
         return OpenAIErrorResponse(error=OpenAIErrorDetail(
             message="Server RKLLM is busy! Please try again later.",
             type="server_error"))
+    
+    logging.info(f"New Request! Locked: {request.app.state.lock.locked()}")
 
-    with request.app.state.lock:
+    async with request.app.state.lock:
         try:
 
             stream = data.stream
@@ -88,6 +90,7 @@ async def chat_completions(
                             "delta": {},
                             "finish_reason": "stop"
                         }])
+                    # logging.info(rkllm_output) # TODO: REMOVE
                     yield f"data: {final_response.model_dump_json()}\n\n"
                     yield "data: [DONE]\n\n"
                 else:
@@ -252,3 +255,7 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
             "total_tokens":
             sum(len(text.split()) for text in ebm_request.input)
         })
+
+@router.get("/is_busy")
+async def is_busy(request: Request) -> bool:
+    return request.app.state.lock.locked()
