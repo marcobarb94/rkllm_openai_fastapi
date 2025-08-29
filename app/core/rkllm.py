@@ -10,8 +10,6 @@ from typing import Any, Collection, Literal, Optional, Tuple
 from core.util import EmbeddingsLLMData
 from core.entities_llm import *
 
-# Set the dynamic library path
-rkllm_lib = ctypes.CDLL('../libs/librkllmrt.so')
 # nm -D rkllm_server/lib/librkllmrt.so
 """
 00000000000b8f80 T rkllm_abort
@@ -129,8 +127,18 @@ class RKLLM(object):
                  prompt_text_prefix: str = DEFAULT_PROMPT_TEXT_PREFIX,
                  prompt_text_postfix: str = DEFAULT_PROMPT_TEXT_POSTFIX,
                  system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-                 llm_params: Optional[LLMParams] = None):
-        rkllm_param = RKLLMParam()
+                 llm_params: Optional[LLMParams] = None,
+                 dll_path: str = '../libs/librkllmrt.so'):
+
+        # Set the dynamic library path
+        rkllm_lib = ctypes.CDLL(dll_path)
+
+        self.f_rkllm_createDefaultParam = rkllm_lib.rkllm_createDefaultParam
+        self.f_rkllm_createDefaultParam.argtypes = []
+        self.f_rkllm_createDefaultParam.restype = RKLLMParam
+
+        rkllm_param = self.f_rkllm_createDefaultParam()
+
         if llm_params is None:
             llm_params = LLMParams()
         rkllm_param.model_path = bytes(model_path, 'utf-8')
@@ -159,53 +167,69 @@ class RKLLM(object):
         rkllm_param.extend_param.enabled_cpus_num = 4
         rkllm_param.extend_param.enabled_cpus_mask = (1 << 4) | (1 << 5) | (
             1 << 6) | (1 << 7)
-        
+
         rkllm_param.extend_param.n_batch = 1
-        rkllm_param.extend_param.use_cross_attn = 0 # metto zero o esplode la ram
+        rkllm_param.extend_param.use_cross_attn = 0  # metto zero o esplode la ram
 
         self.handle = RKLLM_Handle_t()
 
-        self.rkllm_init = rkllm_lib.rkllm_init
-        self.rkllm_init.argtypes = [
+        self.f_rkllm_init = rkllm_lib.rkllm_init
+        self.f_rkllm_init.argtypes = [
             ctypes.POINTER(RKLLM_Handle_t),
             ctypes.POINTER(RKLLMParam), callback_type
         ]
-        self.rkllm_init.restype = ctypes.c_int
-        self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param),
-                        callback)
+        self.f_rkllm_init.restype = ctypes.c_int
+        self.f_rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param),
+                          callback)
 
-        self.rkllm_run = rkllm_lib.rkllm_run
-        self.rkllm_run.argtypes = [
+        self.f_rkllm_run = rkllm_lib.rkllm_run
+        self.f_rkllm_run.argtypes = [
             RKLLM_Handle_t,
             ctypes.POINTER(RKLLMInput),
             ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p
         ]
-        self.rkllm_run.restype = ctypes.c_int
+        self.f_rkllm_run.restype = ctypes.c_int
 
-        self.set_chat_template = rkllm_lib.rkllm_set_chat_template
-        self.set_chat_template.argtypes = [
+        self.f_set_chat_template = rkllm_lib.rkllm_set_chat_template
+        self.f_set_chat_template.argtypes = [
             RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p
         ]
-        self.set_chat_template.restype = ctypes.c_int
+        self.f_set_chat_template.restype = ctypes.c_int
 
         if set_chat_template:
-            _res = self.set_chat_template(
+            _res = self.f_set_chat_template(
                 self.handle, ctypes.c_char_p(system_prompt.encode('utf-8')),
                 ctypes.c_char_p(prompt_text_prefix.encode('utf-8')),
                 ctypes.c_char_p(prompt_text_postfix.encode('utf-8')))
             logging.info(f"Set Chat Template: {_res}")
 
-        self.rkllm_destroy = rkllm_lib.rkllm_destroy
-        self.rkllm_destroy.argtypes = [RKLLM_Handle_t]
-        self.rkllm_destroy.restype = ctypes.c_int
+        self.f_rkllm_destroy = rkllm_lib.rkllm_destroy
+        self.f_rkllm_destroy.argtypes = [RKLLM_Handle_t]
+        self.f_rkllm_destroy.restype = ctypes.c_int
 
-        self.rkllm_abort = rkllm_lib.rkllm_abort
-        self.rkllm_abort.argtypes = [RKLLM_Handle_t]
-        self.rkllm_abort.restype = ctypes.c_int
+        self.f_rkllm_abort = rkllm_lib.rkllm_abort
+        self.f_rkllm_abort.argtypes = [RKLLM_Handle_t]
+        self.f_rkllm_abort.restype = ctypes.c_int
 
-        self.rkllm_is_running = rkllm_lib.rkllm_is_running
-        self.rkllm_is_running.argtypes = [RKLLM_Handle_t]
-        self.rkllm_is_running.restype = ctypes.c_int
+        self.f_rkllm_is_running = rkllm_lib.rkllm_is_running
+        self.f_rkllm_is_running.argtypes = [RKLLM_Handle_t]
+        self.f_rkllm_is_running.restype = ctypes.c_int
+
+        self.f_rkllm_set_function_tools = rkllm_lib.rkllm_set_function_tools
+        self.f_rkllm_set_function_tools.argtypes = [
+            RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p
+        ]
+        self.f_rkllm_set_function_tools.restype = ctypes.c_int
+
+        if llm_params.tools is not None:
+            _res = self.f_rkllm_set_function_tools(
+                self.handle,
+                ctypes.c_char_p(
+                    llm_params.tools.system_prompt.encode('utf-8')),
+                ctypes.c_char_p(llm_params.tools.tools.encode('utf-8')),
+                ctypes.c_char_p(
+                    llm_params.tools.tool_response_str.encode('utf-8')))
+            logging.info(f"Set Fucntion Tools: {_res}")
 
         rkllm_lora_params = None
         if lora_model_path:
@@ -219,13 +243,13 @@ class RKLLM(object):
                 (lora_adapter_name).encode('utf-8'))
             lora_adapter.scale = 1.0
 
-            rkllm_load_lora = rkllm_lib.rkllm_load_lora
-            rkllm_load_lora.argtypes = [
+            self.f_rkllm_load_lora = rkllm_lib.rkllm_load_lora
+            self.f_rkllm_load_lora.argtypes = [
                 RKLLM_Handle_t,
                 ctypes.POINTER(RKLLMLoraAdapter)
             ]
-            rkllm_load_lora.restype = ctypes.c_int
-            rkllm_load_lora(self.handle, ctypes.byref(lora_adapter))
+            self.f_rkllm_load_lora.restype = ctypes.c_int
+            self.f_rkllm_load_lora(self.handle, ctypes.byref(lora_adapter))
             rkllm_lora_params = RKLLMLoraParam()
             rkllm_lora_params.lora_adapter_name = ctypes.c_char_p(
                 (lora_adapter_name).encode('utf-8'))
@@ -242,12 +266,12 @@ class RKLLM(object):
         if prompt_cache_path:
             self.prompt_cache_path = prompt_cache_path
 
-            rkllm_load_prompt_cache = rkllm_lib.rkllm_load_prompt_cache
-            rkllm_load_prompt_cache.argtypes = [
+            self.f_rkllm_load_prompt_cache = rkllm_lib.rkllm_load_prompt_cache
+            self.f_rkllm_load_prompt_cache.argtypes = [
                 RKLLM_Handle_t, ctypes.c_char_p
             ]
-            rkllm_load_prompt_cache.restype = ctypes.c_int
-            rkllm_load_prompt_cache(
+            self.f_rkllm_load_prompt_cache.restype = ctypes.c_int
+            self.f_rkllm_load_prompt_cache(
                 self.handle,
                 ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
 
@@ -277,17 +301,21 @@ class RKLLM(object):
             ctypes.memset(ctypes.byref(userdata), 0,
                           ctypes.sizeof(UserdataCallback))
 
-        self.rkllm_run(self.handle, ctypes.byref(rkllm_input),
-                       ctypes.byref(self.rkllm_infer_params),
-                       userdata if userdata else None)
+        self.f_rkllm_run(self.handle, ctypes.byref(rkllm_input),
+                         ctypes.byref(self.rkllm_infer_params),
+                         userdata if userdata else None)
         return
 
     def release(self):
-        self.rkllm_destroy(self.handle)
+        self.f_rkllm_destroy(self.handle)
 
     def abort_job(self) -> bool:
-        return self.rkllm_abort(self.handle) == 0
+        return self.f_rkllm_abort(self.handle) == 0
 
     def is_running(self) -> bool:
         # status code (0 if a task is running, non-zero for otherwise).
-        return self.rkllm_is_running(self.handle) == 0
+        return self.f_rkllm_is_running(self.handle) == 0
+
+    def __del__(self) -> None:
+        self.abort_job()
+        self.release()

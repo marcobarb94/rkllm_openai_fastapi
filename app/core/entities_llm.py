@@ -1,5 +1,5 @@
 import ctypes
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -191,6 +191,12 @@ class UserdataCallback(ctypes.Structure):
 
 # TODO: rkllm_clear_kv_cache e rkllm_get_kv_cache_size e rkllm_set_function_tools e rkllm_set_cross_attn_params
 
+class ToolSupport(BaseModel):
+    #rkllm_set_function_tools
+    system_prompt: str
+    tools: str
+    tool_response_str : str
+    
 class LLMParams(BaseModel):
     max_context_len: int = 4096
     max_new_tokens: int = 2048
@@ -205,8 +211,11 @@ class LLMParams(BaseModel):
     mirostat_eta: float = 0.1
     logprobs: bool = False
     top_logprobs: int = 5
+    tools: Optional[ToolSupport] = None
 
 
 class EngineComunication(BaseModel):
     function_name: Literal["run", "abort_job", "is_running"]
     params: Dict[str, Any]
+
+
