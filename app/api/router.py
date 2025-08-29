@@ -28,7 +28,7 @@ async def chat_completions(
             message="Server RKLLM is busy! Please try again later.",
             type="server_error"))
 
-    logging.info(f"New Request! Locked: {request.app.state.lock.locked()}")
+    logging.debug(f"New Request! Locked: {request.app.state.lock.locked()}")
 
     async with request.app.state.lock:
         try:
@@ -131,7 +131,10 @@ async def chat_completions(
 async def completions(
     data: CompletionRequest, request: Request, response: Response
 ) -> StreamingResponse | CompletionResponse | OpenAIErrorResponse:
-    with request.app.state.lock:
+
+    logging.info(f"New Request! Locked: {request.app.state.lock.locked()}")
+
+    async with request.app.state.lock:
         try:
 
             stream = data.stream
@@ -263,3 +266,7 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
 @router.get("/is_busy")
 async def is_busy(request: Request) -> bool:
     return request.app.state.lock.locked()
+
+@router.put('/stop_engine')
+async def stop_engine(request: Request) -> bool:
+    return await request.app.state.governor_engine.stop()

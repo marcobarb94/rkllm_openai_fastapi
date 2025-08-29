@@ -54,6 +54,6 @@ class RKLLM_Engine:
                     "ex": str(e)
                 })
 
-        self.engine.release()
-        self.cmd_queue.close()
-        self.control_queue.close()
+        # self.engine.release()
+        # self.cmd_queue.close()
+        # self.control_queue.close()
