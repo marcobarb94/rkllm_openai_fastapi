@@ -41,9 +41,9 @@ async def lifespan(app: FastAPI):
         app.state.tokenizer_config = json.load(fp)
     m_name = config.model_path.split("/")[-1].replace(".rkllm","")
     app.state.model_name = tuple(
-        f"{m_name}-{th}"
+        f"{th}-{m_name}"
         for th in ("std",
-                   "reasoning")) if config.has_thinking else tuple(m_name)
+                   "think")) if config.has_thinking else tuple(m_name)
     app.state.governor_engine = Governor(control_queue=control_queue,
                                          cmd_queue=cmd_queue,
                                          result_queue=result_queue)

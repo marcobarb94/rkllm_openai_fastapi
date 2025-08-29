@@ -289,4 +289,5 @@ class RKLLM(object):
         return self.rkllm_abort(self.handle) == 0
 
     def is_running(self) -> bool:
+        # status code (0 if a task is running, non-zero for otherwise).
         return self.rkllm_is_running(self.handle) == 0

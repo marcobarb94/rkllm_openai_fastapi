@@ -27,7 +27,7 @@ async def chat_completions(
         return OpenAIErrorResponse(error=OpenAIErrorDetail(
             message="Server RKLLM is busy! Please try again later.",
             type="server_error"))
-    
+
     logging.info(f"New Request! Locked: {request.app.state.lock.locked()}")
 
     async with request.app.state.lock:
@@ -41,7 +41,7 @@ async def chat_completions(
                 data.messages,
                 request.app.state.tokenizer_config,
                 enable_thinking=(enable_thinking :=
-                                 model.endswith("reasoning")))
+                                 model.startswith("think-")))
 
             prompt = prompt.strip()
 
@@ -149,7 +149,10 @@ async def completions(
                 _in = 0
                 _response_id = f"cmpl-{time()}"
 
-                async for new_text in gov.stream_generate(prompt):
+                async for new_text in gov.stream_generate(
+                        prompt,
+                        enable_thinking=(enable_thinking :=
+                                         model.startswith("think-"))):
                     if type(new_text) is int:
                         completion_tokens = new_text
                         continue
@@ -255,6 +258,7 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
             "total_tokens":
             sum(len(text.split()) for text in ebm_request.input)
         })
+
 
 @router.get("/is_busy")
 async def is_busy(request: Request) -> bool:
