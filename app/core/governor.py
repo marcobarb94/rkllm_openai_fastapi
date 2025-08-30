@@ -1,4 +1,6 @@
 from asyncio import sleep, to_thread
+import datetime
+from datetime import timedelta
 import logging
 from multiprocessing import Process
 import multiprocessing
@@ -24,6 +26,7 @@ class GovernorShell():
         self.control_queue = control_queue
         self.engine_params = engine_params
         self.process = None
+        self.shutdown_thread = None
 
     def start(self, engine_params: Optional[Dict[str, Any]] = None) -> None:
         if engine_params is None:
@@ -59,6 +62,7 @@ class Governor:
     control_queue: multiprocessing.Queue
     result_queue: multiprocessing.Queue
     governor_engine: GovernorShell
+    last_run: datetime.datetime
 
     def __init__(self, cmd_queue: 'multiprocessing.Queue[EngineComunication]',
                  control_queue: multiprocessing.Queue,
@@ -69,6 +73,7 @@ class Governor:
         self.control_queue = control_queue
         self.result_queue = result_queue
         self.governor_engine = governor_engine
+        self.last_run = datetime.datetime.now()
 
     async def stream_generate(
             self,
@@ -80,7 +85,9 @@ class Governor:
             self.governor_engine.start()
             await sleep(10)
             logging.info('engine start')
-            
+
+        self.last_run = datetime.datetime.now()
+
         logging.info('request lock')
         async with self.lock:
             logging.info('ok lock')
@@ -90,7 +97,8 @@ class Governor:
                 self.result_queue._reset()
                 while True:
                     try:
-                        await to_thread(self.result_queue.get,timeout=1) # stop cross talk
+                        await to_thread(self.result_queue.get,
+                                        timeout=1)  # stop cross talk
                     except Empty:
                         break
                 self.result_queue._reset()
@@ -106,7 +114,8 @@ class Governor:
                 while not model_thread_finished and self.governor_engine.is_on:
                     await sleep(0.005)
                     while not self.result_queue.empty():
-                        new_text = await to_thread(self.result_queue.get,timeout=25)
+                        new_text = await to_thread(self.result_queue.get,
+                                                   timeout=25)
                         if new_text is None:
                             break
                         if type(new_text) is bool:
@@ -135,7 +144,8 @@ class Governor:
             while not model_thread_finished:
                 await sleep(0.005)
                 while not self.result_queue.empty():
-                    new_text = await to_thread(self.result_queue.get,timeout=60)
+                    new_text = await to_thread(self.result_queue.get,
+                                               timeout=60)
                     if type(new_text) is bool:
                         model_thread_finished = True
                         return EmbeddingsLLMData()
@@ -144,3 +154,10 @@ class Governor:
 
     async def stop(self) -> bool:
         return await self.governor_engine.shutdown()
+
+    async def schedule_shutdown(self, seconds: int = 600) -> None:
+        while True:
+            if (datetime.datetime.now() -
+                    self.last_run) > timedelta(seconds=seconds):
+                await self.stop()
+            await sleep(seconds >> 1)

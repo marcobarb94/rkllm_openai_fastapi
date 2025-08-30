@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
                                          cmd_queue=cmd_queue,
                                          result_queue=result_queue,
                                          governor_engine=gov_engine)
+    task_stop = asyncio.create_task(
+        app.state.governor_engine.schedule_shutdown(seconds=1000))
     yield
     logging.info("Stop")
     # Clean up the ML models and release the resources
