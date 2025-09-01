@@ -1,4 +1,5 @@
 from asyncio import sleep, to_thread
+import asyncio
 import datetime
 from datetime import timedelta
 import logging
@@ -18,6 +19,7 @@ class GovernorShell():
     control_queue: multiprocessing.Queue
     cmd_queue: 'multiprocessing.Queue[EngineComunication]'
     engine_params: Dict[str, Any]
+    _lock: asyncio.Lock
 
     def __init__(self, engine_params: Dict[str, Any],
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
@@ -27,28 +29,37 @@ class GovernorShell():
         self.engine_params = engine_params
         self.process = None
         self.shutdown_thread = None
+        self._lock = asyncio.Lock()
 
-    def start(self, engine_params: Optional[Dict[str, Any]] = None) -> None:
-        if engine_params is None:
-            engine_params = {}
+    async def start(self,
+                    engine_params: Optional[Dict[str, Any]] = None) -> bool:
+        async with self._lock:
+            if self.is_on:
+                return False
+            if engine_params is None:
+                engine_params = {}
 
-        _dict_params = self.engine_params | engine_params
+            _dict_params = self.engine_params | engine_params
 
-        self.engine = RKLLM_Engine(_dict_params,
-                                   control_queue=self.control_queue,
-                                   cmd_queue=self.cmd_queue)
+            self.engine = RKLLM_Engine(_dict_params,
+                                       control_queue=self.control_queue,
+                                       cmd_queue=self.cmd_queue)
 
-        self.process = Process(target=self.engine.worker_func)
-        self.process.start()
+            self.process = Process(target=self.engine.worker_func)
+            self.process.start()
+            await sleep(10)
+            logging.info(f'Start Engine: {self.process.is_alive()}')
 
     async def shutdown(self) -> bool:
-        self.cmd_queue.put("STOP")
-        if self.is_on and self.process.is_alive():
-            self.process.terminate()
-            await sleep(3)
-            #process.join(timeout=5)
-            self.process.kill()
-            return not self.process.is_alive()
+        async with self._lock:
+            self.cmd_queue.put("STOP")
+            if self.is_on and self.process.is_alive():
+                self.process.terminate()
+                await sleep(3)
+                #process.join(timeout=5)
+                self.process.kill()
+                logging.info(f'Stop Engine: {not self.process.is_alive()}')
+                return not self.process.is_alive()
         return True
 
     @property
@@ -81,16 +92,16 @@ class Governor:
             enable_thinking: bool = False) -> AsyncGenerator[str, str | int]:
         # bloccante fino a quando non sono finiti i job
 
-        if not self.governor_engine.is_on:
-            self.governor_engine.start()
-            await sleep(10)
-            logging.info('engine start')
-
-        self.last_run = datetime.datetime.now()
-
         logging.info('request lock')
         async with self.lock:
             logging.info('ok lock')
+
+            if not self.governor_engine.is_on:
+                await self.governor_engine.start()
+                logging.info('engine start')
+
+            self.last_run = datetime.datetime.now()
+
             try:
                 self.cmd_queue.put(
                     EngineComunication(function_name="abort_job", params={}))
@@ -98,7 +109,7 @@ class Governor:
                 while True:
                     try:
                         await to_thread(self.result_queue.get,
-                                        timeout=1)  # stop cross talk
+                                        timeout=2)  # stop cross talk
                     except Empty:
                         break
                 self.result_queue._reset()
@@ -111,11 +122,12 @@ class Governor:
                                        }))
                 model_thread_finished = False
                 completion_tokens = 0
+                yield ""
                 while not model_thread_finished and self.governor_engine.is_on:
                     await sleep(0.005)
                     while not self.result_queue.empty():
                         new_text = await to_thread(self.result_queue.get,
-                                                   timeout=25)
+                                                   timeout=30)
                         if new_text is None:
                             break
                         if type(new_text) is bool:
@@ -157,7 +169,10 @@ class Governor:
 
     async def schedule_shutdown(self, seconds: int = 600) -> None:
         while True:
-            if (datetime.datetime.now() -
-                    self.last_run) > timedelta(seconds=seconds):
+            if (datetime.datetime.now() - self.last_run) > timedelta(
+                    seconds=seconds) and self.governor_engine.is_on:
+                logging.info(
+                    f'Stopping Engine {(datetime.datetime.now() - self.last_run)}'
+                )
                 await self.stop()
             await sleep(seconds >> 1)
