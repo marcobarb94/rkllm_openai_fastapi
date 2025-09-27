@@ -6,8 +6,13 @@ import logging
 from multiprocessing import Process
 import multiprocessing
 from queue import Empty
-from typing import Any, AsyncGenerator, Dict, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from asyncio import Lock
+from core.entities_api import EngineParams
+from core.entities_llm import EngineComunication
+from functools import lru_cache
+
+from pydantic import BaseModel
 from core.entities_llm import EngineComunication
 from core.process import RKLLM_Engine
 from core.util import EmbeddingsLLMData, num_tokens_from_string
@@ -18,28 +23,36 @@ class GovernorShell():
     process: Optional[Process]
     control_queue: multiprocessing.Queue
     cmd_queue: 'multiprocessing.Queue[EngineComunication]'
-    engine_params: Dict[str, Any]
-    _lock: asyncio.Lock
 
-    def __init__(self, engine_params: Dict[str, Any],
+    model_collection: List[EngineParams]
+    _lock: asyncio.Lock
+    model_running_id: int
+
+    def __init__(self, model_collection: List[EngineParams],
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
                  control_queue: multiprocessing.Queue):
         self.cmd_queue = cmd_queue
         self.control_queue = control_queue
-        self.engine_params = engine_params
+        self.model_collection = model_collection
         self.process = None
         self.shutdown_thread = None
         self._lock = asyncio.Lock()
+        self.model_running_id = -1
 
-    async def start(self,
-                    engine_params: Optional[Dict[str, Any]] = None) -> bool:
+    async def start(self, model_id: int = 0) -> bool:
+        if model_id not in range(len(self.model_collection)):
+            logging.error(f"Model_id {model_id} not found")
+            return False
+
         async with self._lock:
-            if self.is_on:
-                return False
-            if engine_params is None:
-                engine_params = {}
 
-            _dict_params = self.engine_params | engine_params
+            if self.is_on:
+                if self.model_running_id == model_id:
+                    return True
+                await self.shutdown()
+
+            self.model_running_id = model_id
+            _dict_params = self.model_collection[self.model_running_id]
 
             self.engine = RKLLM_Engine(_dict_params,
                                        control_queue=self.control_queue,
@@ -49,11 +62,12 @@ class GovernorShell():
             self.process.start()
             await sleep(10)
             logging.info(f'Start Engine: {self.process.is_alive()}')
+            return True
 
     async def shutdown(self) -> bool:
         async with self._lock:
             self.cmd_queue.put("STOP")
-            if self.is_on and self.process.is_alive():
+            if self.is_on and self.process and self.process.is_alive():
                 self.process.terminate()
                 await sleep(3)
                 #process.join(timeout=5)
@@ -65,6 +79,28 @@ class GovernorShell():
     @property
     def is_on(self) -> bool:
         return self.process.is_alive() if self.process else False
+
+    @lru_cache(1)
+    def get_model_catalog(self) -> Dict[str, Dict[str, int | bool]]:
+        """Return all models name with the associated id
+
+        :return: _description_
+        :rtype: Dict[str, int]
+        """
+        _out = {}
+        for i, _dict_params in enumerate(self.model_collection):
+            for _name, _think in _dict_params.get_names():
+                _out[_name] = {"id": i, "think": _think}
+
+        return _out
+
+    def get_model_id(self,
+                     model_name: str) -> Tuple[int, bool, Dict[str, Any]]:
+        if model_name in self.get_model_catalog():
+            _re = self.get_model_catalog()[model_name]
+            return (_re["id"], _re["think"],
+                    self.model_collection[_re["id"]].tokenizer_config)
+        raise ValueError(f"Model {model_name} not found!")
 
 
 class Governor:
@@ -87,18 +123,18 @@ class Governor:
         self.last_run = datetime.datetime.now()
 
     async def stream_generate(
-            self,
-            prompt: str,
-            enable_thinking: bool = False) -> AsyncGenerator[str, str | int]:
+            self, prompt: str,
+            model_name: str) -> AsyncGenerator[str | int, str | int]:
         # bloccante fino a quando non sono finiti i job
+
+        model_id, enable_thinking, _ = self.governor_engine.get_model_id(  # type: ignore
+            model_name=model_name)
 
         logging.info('request lock')
         async with self.lock:
             logging.info('ok lock')
-
-            if not self.governor_engine.is_on:
-                await self.governor_engine.start()
-                logging.info('engine start')
+            await self.governor_engine.start(model_id)
+            logging.info('engine start')
 
             self.last_run = datetime.datetime.now()
 
@@ -141,9 +177,20 @@ class Governor:
                     EngineComunication(function_name="abort_job", params={}))
                 raise
 
-    async def hidden_layer(self, prompt: str) -> EmbeddingsLLMData:
-        # bloccante fino a quando non sono finiti i job
+    async def hidden_layer(self, prompt: str,
+                           model_name: str) -> EmbeddingsLLMData:
+
+        model_id, _ , _ = self.governor_engine.get_model_id(  # type: ignore
+            model_name=model_name)
+
+        logging.info('request lock')
         async with self.lock:
+            logging.info('ok lock')
+            await self.governor_engine.start(model_id)
+            logging.info('engine start')
+
+            self.last_run = datetime.datetime.now()
+            # bloccante fino a quando non sono finiti i job
             self.cmd_queue.put(
                 EngineComunication(function_name="run",
                                    params={

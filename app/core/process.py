@@ -1,13 +1,13 @@
 import multiprocessing
 import logging
 from typing import *
-from core.entities_llm import EngineComunication
+from core.entities_llm import EngineComunication, EngineParams
 from core.rkllm import RKLLM, global_state
 
 
 class RKLLM_Engine:
 
-    def __init__(self, engine_params: Dict[str, Any],
+    def __init__(self, engine_params: EngineParams,
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
                  control_queue: multiprocessing.Queue):
         self.cmd_queue = cmd_queue
@@ -17,7 +17,7 @@ class RKLLM_Engine:
 
     def worker_func(self):
         # Esegue eventuali inizializzazioni della libreria se necessario
-        self.engine = RKLLM(**self.engine_params)
+        self.engine = RKLLM(**self.engine_params.model_dump())
         logging.info("Loaded")
         while True:
             cmd = self.cmd_queue.get(

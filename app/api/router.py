@@ -16,6 +16,28 @@ from core.rkllm import result_queue, global_state
 router = APIRouter(prefix="/v1")
 
 
+def init_funct(data: ChatCompletionRequest | CompletionRequest,
+               ge: Governor,
+               completions_only: bool = False) -> Tuple[str, bool, str]:
+
+    stream = data.stream
+    try:
+        _, enable_thinking, tokenizer_config = ge.governor_engine.get_model_id(
+            model_name=data.model)
+    except ValueError as e:
+        logging.error(e)
+        return OpenAIErrorResponse(error=OpenAIErrorDetail(
+            message=str(e), type="invalid_request_error"))
+
+    prompt = (
+        "\n".join(data.messages) if isinstance(data.messages, list) else
+        data.messages) if completions_only else parse_message_to_prompt(
+            data.messages, tokenizer_config, enable_thinking=enable_thinking)
+
+    prompt = prompt.strip()
+    return prompt, stream, data.model
+
+
 @router.post('/chat/completions', response_model=None)
 async def chat_completions(
     data: ChatCompletionRequest, request: Request, response: Response
@@ -29,98 +51,85 @@ async def chat_completions(
             type="server_error"))
 
     logging.debug(f"New Request! Locked: {request.app.state.lock.locked()}")
+    # TODO: studio su batch inference
+    ge: Governor = request.app.state.governor_engine
+    prompt, stream, model_name = init_funct(data, ge)
+
+    async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
+
+        prompt_tokens = num_tokens_from_string(prompt)
+        completion_tokens = 0
+        rkllm_output = ""
+
+        async for new_text in gov.stream_generate(prompt,
+                                                  model_name=model_name):
+            if type(new_text) is int:
+                completion_tokens = new_text
+                continue
+
+            rkllm_output += new_text
+
+            if stream:
+                _res = ChatCompletionChunk(id=f"chatcmpl-{time()}",
+                                           object="chat.completion.chunk",
+                                           created=int(time()),
+                                           model=model_name,
+                                           choices=[{
+                                               "index": 0,
+                                               "delta": {
+                                                   "content": new_text
+                                               },
+                                               "finish_reason": None
+                                           }])
+
+                yield f"data: {_res.model_dump_json()}\n\n"
+
+            if await request.is_disconnected(
+            ):  # await request.is_disconnected():
+                break
+
+        if stream:
+            final_response = ChatCompletionChunk(
+                id=f"chatcmpl-{time()}",
+                object="chat.completion.chunk",
+                created=int(time()),
+                model=model_name,
+                choices=[{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }])
+            # logging.info(rkllm_output) # TODO: REMOVE
+            yield f"data: {final_response.model_dump_json()}\n\n"
+            yield "data: [DONE]\n\n"
+        else:
+            yield ChatCompletionResponse(
+                id=f"chatcmpl-{time()}",
+                object="chat.completion",
+                created=int(time()),
+                model=model_name,
+                choices=[{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": rkllm_output,
+                    },
+                    "finish_reason": "stop",
+                }],
+                usage={
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+            )
 
     async with request.app.state.lock:
         try:
-
-            stream = data.stream
-            model = data.model if data.model else request.app.state.model_name[
-                0]
-
-            prompt = parse_message_to_prompt(
-                data.messages,
-                request.app.state.tokenizer_config,
-                enable_thinking=(enable_thinking :=
-                                 model.startswith("think-")))
-
-            prompt = prompt.strip()
-
-            async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
-
-                prompt_tokens = num_tokens_from_string(prompt)
-                completion_tokens = 0
-                rkllm_output = ""
-
-                async for new_text in gov.stream_generate(
-                        prompt, enable_thinking=enable_thinking):
-                    if type(new_text) is int:
-                        completion_tokens = new_text
-                        continue
-
-                    rkllm_output += new_text
-
-                    if stream:
-                        _res = ChatCompletionChunk(
-                            id=f"chatcmpl-{time()}",
-                            object="chat.completion.chunk",
-                            created=int(time()),
-                            model=model,
-                            choices=[{
-                                "index": 0,
-                                "delta": {
-                                    "content": new_text
-                                },
-                                "finish_reason": None
-                            }])
-
-                        yield f"data: {_res.model_dump_json()}\n\n"
-
-                    if await request.is_disconnected(
-                    ):  # await request.is_disconnected():
-                        break
-
-                if stream:
-                    final_response = ChatCompletionChunk(
-                        id=f"chatcmpl-{time()}",
-                        object="chat.completion.chunk",
-                        created=int(time()),
-                        model=model,
-                        choices=[{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }])
-                    # logging.info(rkllm_output) # TODO: REMOVE
-                    yield f"data: {final_response.model_dump_json()}\n\n"
-                    yield "data: [DONE]\n\n"
-                else:
-                    yield ChatCompletionResponse(
-                        id=f"chatcmpl-{time()}",
-                        object="chat.completion",
-                        created=int(time()),
-                        model=model,
-                        choices=[{
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                "content": rkllm_output,
-                            },
-                            "finish_reason": "stop",
-                        }],
-                        usage={
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                            "total_tokens": prompt_tokens + completion_tokens,
-                        },
-                    )
-
             if stream:
-                return StreamingResponse(generate(
-                    prompt, request.app.state.governor_engine),
+                return StreamingResponse(generate(prompt, ge),
                                          media_type='text/event-stream')
             else:
-                return await anext(
-                    generate(prompt, request.app.state.governor_engine))
+                return await anext(generate(prompt, ge))
         except Exception as e:
             logging.error(e)
             return OpenAIErrorResponse(
@@ -133,16 +142,11 @@ async def completions(
 ) -> StreamingResponse | CompletionResponse | OpenAIErrorResponse:
 
     logging.info(f"New Request! Locked: {request.app.state.lock.locked()}")
+    ge: Governor = request.app.state.governor_engine
+    prompt, stream, model_name = init_funct(data, ge, completions_only=True)
 
     async with request.app.state.lock:
         try:
-
-            stream = data.stream
-            model = data.model if data.model else request.app.state.model_name
-
-            prompt = data.prompt
-
-            prompt = prompt.strip()
 
             async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
 
@@ -153,9 +157,7 @@ async def completions(
                 _response_id = f"cmpl-{time()}"
 
                 async for new_text in gov.stream_generate(
-                        prompt,
-                        enable_thinking=(enable_thinking :=
-                                         model.startswith("think-"))):
+                        prompt, model_name=model_name):
                     if type(new_text) is int:
                         completion_tokens = new_text
                         continue
@@ -166,7 +168,7 @@ async def completions(
                         _in += 1
                         _res = CompletionResponse(id=_response_id,
                                                   created=int(time()),
-                                                  model=model,
+                                                  model=model_name,
                                                   choices=[
                                                       CompletionChoice(
                                                           index=_in,
@@ -182,7 +184,7 @@ async def completions(
                 if stream:
                     final_response = CompletionResponse(id=_response_id,
                                                         created=int(time()),
-                                                        model=model,
+                                                        model=model_name,
                                                         choices=[{
                                                             "index":
                                                             0,
@@ -197,7 +199,7 @@ async def completions(
                     yield CompletionResponse(
                         id=_response_id,
                         created=int(time()),
-                        model=model,
+                        model=model_name,
                         choices=[{
                             "index": 0,
                             "text": rkllm_output,
@@ -211,12 +213,10 @@ async def completions(
                     )
 
             if stream:
-                return StreamingResponse(generate(
-                    prompt, request.app.state.governor_engine),
+                return StreamingResponse(generate(prompt, ge),
                                          media_type='text/event-stream')
             else:
-                return await anext(
-                    generate(prompt, request.app.state.governor_engine))
+                return await anext(generate(prompt, ge))
         except Exception as e:
             logging.error(e)
             return OpenAIErrorResponse(
@@ -225,16 +225,20 @@ async def completions(
 
 @router.get('/models')
 async def get_models(request: Request) -> ModelsResponse:
-    return ModelsResponse(object="list",
-                          data=[
-                              Model(id=m_mod, object="model")
-                              for m_mod in request.app.state.model_name
-                          ])
+    ge: Governor = request.app.state.governor_engine
+    return ModelsResponse(
+        object="list",
+        data=[
+            Model(id=m_mod, object="model")
+            for m_mod in ge.governor_engine.get_model_catalog().items()
+        ])
 
 
 @router.post("/embeddings",
              response_model=EmbeddingResponse | OpenAIErrorResponse)
 async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
+    ge: Governor = request.app.state.governor_engine
+
     with request.app.state.lock:
         # Creiamo la lista di embeddings con indice
         try:
@@ -242,8 +246,8 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
                 EmbeddingData(
                     object="embedding",
                     embedding=get_sentence_embedding(
-                        hidden_states=(await request.app.state.governor_engine.
-                                       hidden_layer(_r)).hidden_layer,
+                        hidden_states=(await ge.hidden_layer(
+                            _r, ebm_request.model)).hidden_layer,
                         logits_aw=None,  #_emb_logit[0].logits,
                         emb_type="mean"),
                     index=i) for i, _r in enumerate(ebm_request.input)
@@ -267,6 +271,8 @@ async def get_embedding(request: Request, ebm_request: EmbeddingRequest):
 async def is_busy(request: Request) -> bool:
     return request.app.state.lock.locked()
 
+
 @router.put('/stop_engine')
 async def stop_engine(request: Request) -> bool:
-    return await request.app.state.governor_engine.stop()
+    ge: Governor = request.app.state.governor_engine
+    return await ge.stop()

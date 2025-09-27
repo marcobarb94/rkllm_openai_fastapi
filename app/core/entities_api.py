@@ -1,9 +1,10 @@
+import json
+import logging
 from time import time
-from typing import List, Literal, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field
+from typing import Annotated, List, Literal, Optional, Dict, Any, Tuple, Union
+from pydantic import AfterValidator, BaseModel, Field, computed_field
 from enum import StrEnum
-
-from core.entities_llm import LLMParams
+import os
 
 
 class OpenAIRoles(StrEnum):
@@ -96,13 +97,6 @@ class CompletionResponse(BaseModel):
         ..., description="Elenco delle possibili completions generate")
     usage: Optional[CompletionUsage] = Field(
         None, description="Dati sull'utilizzo dei token")
-
-
-class ChatMessage(BaseModel):
-    role: str = Field(
-        ...,
-        description="Ruolo del messaggio, es. 'system', 'user', 'assistant'")
-    content: str = Field(..., description="Contenuto del messaggio")
 
 
 class ChatChoice(BaseModel):
@@ -213,8 +207,42 @@ class EmbeddingResponse(BaseModel):
     usage: dict  # Opzionale, per monitorare token usati
 
 
+def path_validate(path: str):
+    if os.path.exists(path):
+        return True
+    logging.error(f"Path not found at {path}")
+    return False
+
+
+class EngineParams(BaseModel):
+    path_tokenizer_config: Annotated[str,
+                                     AfterValidator(path_validate)] = Field(
+                                         exclude=True)
+    model_path: Annotated[str, AfterValidator(path_validate)]
+    llm_params: Dict[str, Any]
+    # pydantic private attribute to indicate if the model has thinking capability
+    has_thinking: bool = Field(True, exclude=True)
+
+    # post validation to check if path are ok
+    @property
+    @computed_field
+    def tokenizer_config(self) -> Dict[str,Any]:
+        with open(self.path_tokenizer_config) as fp:
+            return json.load(fp)
+
+    # method to get the names of the models based
+
+    def get_names(self) -> List[Tuple[str, bool]]:
+        """_summary_
+
+        :return: name + is_thinking
+        :rtype: List[Tuple[str, bool]]
+        """
+        return [(f"{th}{self.model_path.split('/')[-1].replace('.rkllm', '')}",
+                 th == "think-")
+                for th in (("std-", "think-") if self.has_thinking else ("", ))
+                ]
+
+
 class AppConfig(BaseModel):
-    model_path: str
-    llm_params: LLMParams = Field(default={})
-    path_tokenizer_config: str
-    has_thinking: bool = Field(default=False)
+    model_collection: List[EngineParams]
