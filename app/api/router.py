@@ -54,6 +54,8 @@ async def chat_completions(
     # TODO: studio su batch inference
     ge: Governor = request.app.state.governor_engine
     prompt, stream, model_name = init_funct(data, ge)
+    
+    logging.info(f"Request for {model_name}")
 
     async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
 
@@ -230,7 +232,7 @@ async def get_models(request: Request) -> ModelsResponse:
         object="list",
         data=[
             Model(id=m_mod, object="model")
-            for m_mod in ge.governor_engine.get_model_catalog().items()
+            for m_mod in ge.governor_engine.get_model_catalog()
         ])
 
 

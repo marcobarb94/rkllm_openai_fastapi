@@ -141,6 +141,8 @@ class RKLLM(object):
 
         if llm_params is None:
             llm_params = LLMParams()
+        elif isinstance(llm_params,dict):
+            llm_params = LLMParams.model_validate(llm_params)
         rkllm_param.model_path = bytes(model_path, 'utf-8')
 
         # Initialize other parameters

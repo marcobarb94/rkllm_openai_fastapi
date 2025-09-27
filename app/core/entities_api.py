@@ -2,7 +2,7 @@ import json
 import logging
 from time import time
 from typing import Annotated, List, Literal, Optional, Dict, Any, Tuple, Union
-from pydantic import AfterValidator, BaseModel, Field, computed_field
+from pydantic import AfterValidator, BaseModel, Field, computed_field, field_validator, model_validator
 from enum import StrEnum
 import os
 
@@ -209,9 +209,9 @@ class EmbeddingResponse(BaseModel):
 
 def path_validate(path: str):
     if os.path.exists(path):
-        return True
+        return path
     logging.error(f"Path not found at {path}")
-    return False
+    raise ValueError(f"Model not found at {path}")
 
 
 class EngineParams(BaseModel):
@@ -219,14 +219,22 @@ class EngineParams(BaseModel):
                                      AfterValidator(path_validate)] = Field(
                                          exclude=True)
     model_path: Annotated[str, AfterValidator(path_validate)]
+    name: Optional[str] = Field (None)
     llm_params: Dict[str, Any]
     # pydantic private attribute to indicate if the model has thinking capability
     has_thinking: bool = Field(True, exclude=True)
 
+    @model_validator(mode="after")
+    def check_model(self):
+        # se nome non è stato passato, lo calcolo da path
+        if self.name is None:
+            self.name = self.model_path.split('/')[-1].replace('.rkllm', '')
+        return self
+
     # post validation to check if path are ok
-    @property
-    @computed_field
-    def tokenizer_config(self) -> Dict[str,Any]:
+    @computed_field  # type:ignore
+    @property  # type:ignore
+    def tokenizer_config(self) -> Dict[str, Any]:
         with open(self.path_tokenizer_config) as fp:
             return json.load(fp)
 
@@ -238,7 +246,7 @@ class EngineParams(BaseModel):
         :return: name + is_thinking
         :rtype: List[Tuple[str, bool]]
         """
-        return [(f"{th}{self.model_path.split('/')[-1].replace('.rkllm', '')}",
+        return [(f"{th}{self.name}",
                  th == "think-")
                 for th in (("std-", "think-") if self.has_thinking else ("", ))
                 ]

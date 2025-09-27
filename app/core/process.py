@@ -1,8 +1,14 @@
 import multiprocessing
 import logging
 from typing import *
-from core.entities_llm import EngineComunication, EngineParams
+from core.entities_llm import EngineComunication
+from core.entities_api import EngineParams
+
 from core.rkllm import RKLLM, global_state
+
+import inspect
+
+VALID_PARAMS_RKLLM = inspect.signature(RKLLM).parameters
 
 
 class RKLLM_Engine:
@@ -16,8 +22,16 @@ class RKLLM_Engine:
         pass
 
     def worker_func(self):
-        # Esegue eventuali inizializzazioni della libreria se necessario
-        self.engine = RKLLM(**self.engine_params.model_dump())
+
+        # Filtra solo i parametri che RKLLM accetta
+        filtered_params = {
+            k: v
+            for k, v in self.engine_params.model_dump().items()
+            if k in VALID_PARAMS_RKLLM
+        }
+
+        self.engine = RKLLM(**filtered_params)
+
         logging.info("Loaded")
         while True:
             cmd = self.cmd_queue.get(

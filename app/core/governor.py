@@ -17,6 +17,17 @@ from core.entities_llm import EngineComunication
 from core.process import RKLLM_Engine
 from core.util import EmbeddingsLLMData, num_tokens_from_string
 
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def maybe_lock(lock, use_lock: bool):
+    if use_lock:
+        async with lock:
+            yield
+    else:
+        yield
+
 
 class GovernorShell():
     engine: RKLLM_Engine
@@ -49,7 +60,10 @@ class GovernorShell():
             if self.is_on:
                 if self.model_running_id == model_id:
                     return True
-                await self.shutdown()
+                await self.shutdown(ignore_lock=True)
+
+            logging.info(
+                f"Changing model from {self.model_running_id} to {model_id}")
 
             self.model_running_id = model_id
             _dict_params = self.model_collection[self.model_running_id]
@@ -64,8 +78,9 @@ class GovernorShell():
             logging.info(f'Start Engine: {self.process.is_alive()}')
             return True
 
-    async def shutdown(self) -> bool:
-        async with self._lock:
+    async def shutdown(self, ignore_lock: bool = False) -> bool:
+        # Uso:
+        async with maybe_lock(self._lock, not ignore_lock):
             self.cmd_queue.put("STOP")
             if self.is_on and self.process and self.process.is_alive():
                 self.process.terminate()
@@ -130,7 +145,7 @@ class Governor:
         model_id, enable_thinking, _ = self.governor_engine.get_model_id(  # type: ignore
             model_name=model_name)
 
-        logging.info('request lock')
+        logging.info(f'request lock: locked? {self.lock.locked()}')
         async with self.lock:
             logging.info('ok lock')
             await self.governor_engine.start(model_id)
@@ -180,7 +195,7 @@ class Governor:
     async def hidden_layer(self, prompt: str,
                            model_name: str) -> EmbeddingsLLMData:
 
-        model_id, _ , _ = self.governor_engine.get_model_id(  # type: ignore
+        model_id, _, _ = self.governor_engine.get_model_id(  # type: ignore
             model_name=model_name)
 
         logging.info('request lock')
