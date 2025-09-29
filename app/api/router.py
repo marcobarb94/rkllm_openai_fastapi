@@ -9,8 +9,9 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.embeddings import generate_embeddings, get_sentence_embedding
 from core.entities_api import ChatCompletionChunk, ChatCompletionRequest, CompletionChoice, CompletionRequest, ChatCompletionResponse, CompletionResponse, EmbeddingData, EmbeddingRequest, EmbeddingResponse, Model, ModelsResponse, OpenAIErrorDetail, OpenAIErrorResponse, OpenAIRoles
+from core.entities_llm import RKLLMPerfStat
 from core.governor import Governor
-from core.util import num_tokens_from_string, parse_message_to_prompt
+from core.util import QueueResult, num_tokens_from_string, parse_message_to_prompt
 from core.rkllm import result_queue, global_state
 
 router = APIRouter(prefix="/v1")
@@ -54,7 +55,7 @@ async def chat_completions(
     # TODO: studio su batch inference
     ge: Governor = request.app.state.governor_engine
     prompt, stream, model_name = init_funct(data, ge)
-    
+
     logging.info(f"Request for {model_name}")
 
     async def generate(prompt: str, gov: Governor) -> AsyncGenerator:
@@ -62,14 +63,28 @@ async def chat_completions(
         prompt_tokens = num_tokens_from_string(prompt)
         completion_tokens = 0
         rkllm_output = ""
+        usage_info: RKLLMPerfStat = None
+        _id = int(time())
 
-        async for new_text in gov.stream_generate(prompt,
-                                                  model_name=model_name):
-            if type(new_text) is int:
-                completion_tokens = new_text
+        async for q_res in gov.stream_generate(prompt,
+                                               model_name=model_name,
+                                               _id=_id):
+            if type(q_res) is not QueueResult:
+                continue
+            if q_res.queue_id != _id:
+                logging.info(f"{q_res.queue_id} != {_id}")
                 continue
 
-            rkllm_output += new_text
+            _out = q_res.payload
+            _type = type(_out)
+            if _type is int:
+                completion_tokens = _out
+                continue
+            elif _type is RKLLMPerfStat:
+                usage_info = _out
+                continue
+
+            rkllm_output += _out
 
             if stream:
                 _res = ChatCompletionChunk(id=f"chatcmpl-{time()}",
@@ -79,7 +94,7 @@ async def chat_completions(
                                            choices=[{
                                                "index": 0,
                                                "delta": {
-                                                   "content": new_text
+                                                   "content": _out
                                                },
                                                "finish_reason": None
                                            }])
@@ -100,7 +115,9 @@ async def chat_completions(
                     "index": 0,
                     "delta": {},
                     "finish_reason": "stop"
-                }])
+                }],
+                usage=usage_info.openai_usage(),
+            )
             # logging.info(rkllm_output) # TODO: REMOVE
             yield f"data: {final_response.model_dump_json()}\n\n"
             yield "data: [DONE]\n\n"
@@ -118,11 +135,7 @@ async def chat_completions(
                     },
                     "finish_reason": "stop",
                 }],
-                usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                },
+                usage=usage_info.openai_usage(),
             )
 
     async with request.app.state.lock:
@@ -157,25 +170,34 @@ async def completions(
                 rkllm_output = ""
                 _in = 0
                 _response_id = f"cmpl-{time()}"
+                _id = int(time())
+                usage_info: RKLLMPerfStat = None
 
-                async for new_text in gov.stream_generate(
-                        prompt, model_name=model_name):
-                    if type(new_text) is int:
-                        completion_tokens = new_text
+                async for q_res in gov.stream_generate(prompt,
+                                                       model_name=model_name,
+                                                       _id=_id):
+                    if q_res.queue_id != _id:
+                        logging.info(f"{q_res.queue_id} != {_id}")
                         continue
 
-                    rkllm_output += new_text
+                    _out = q_res.payload
+                    _type = type(_out)
+                    if _type is int:
+                        completion_tokens = _out
+                        continue
+                    elif _type is RKLLMPerfStat:
+                        usage_info = _out
+                        continue
+
+                    rkllm_output += _out
 
                     if stream:
                         _in += 1
-                        _res = CompletionResponse(id=_response_id,
-                                                  created=int(time()),
-                                                  model=model_name,
-                                                  choices=[
-                                                      CompletionChoice(
-                                                          index=_in,
-                                                          text=new_text)
-                                                  ])
+                        _res = CompletionResponse(
+                            id=_response_id,
+                            created=int(time()),
+                            model=model_name,
+                            choices=[CompletionChoice(index=_in, text=_out)])
 
                         yield f"data: {_res.model_dump_json()}\n\n"
 
@@ -184,35 +206,28 @@ async def completions(
                         break
 
                 if stream:
-                    final_response = CompletionResponse(id=_response_id,
-                                                        created=int(time()),
-                                                        model=model_name,
-                                                        choices=[{
-                                                            "index":
-                                                            0,
-                                                            "finish_reason":
-                                                            "stop",
-                                                            "text":
-                                                            ""
-                                                        }])
-                    yield f"data: {final_response.model_dump_json()}\n\n"
-                    yield "data: [DONE]\n\n"
-                else:
-                    yield CompletionResponse(
+                    final_response = CompletionResponse(
                         id=_response_id,
                         created=int(time()),
                         model=model_name,
                         choices=[{
                             "index": 0,
-                            "text": rkllm_output,
                             "finish_reason": "stop",
+                            "text": ""
                         }],
-                        usage={
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                            "total_tokens": prompt_tokens + completion_tokens,
-                        },
-                    )
+                        usage=usage_info.openai_usage())
+                    yield f"data: {final_response.model_dump_json()}\n\n"
+                    yield "data: [DONE]\n\n"
+                else:
+                    yield CompletionResponse(id=_response_id,
+                                             created=int(time()),
+                                             model=model_name,
+                                             choices=[{
+                                                 "index": 0,
+                                                 "text": rkllm_output,
+                                                 "finish_reason": "stop",
+                                             }],
+                                             usage=usage_info.openai_usage())
 
             if stream:
                 return StreamingResponse(generate(prompt, ge),

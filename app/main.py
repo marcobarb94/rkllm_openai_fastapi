@@ -8,7 +8,7 @@ from fastapi import FastAPI
 import os
 from core.entities_api import AppConfig
 from core.governor import Governor, GovernorShell
-from core.rkllm import control_queue, cmd_queue, result_queue
+from core.rkllm import control_queue, cmd_queue, result_queue, callback_queue
 from api.router import router
 import logging
 
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 
     gov_engine = GovernorShell(model_collection=config.model_collection,
                                control_queue=control_queue,
-                               cmd_queue=cmd_queue)
+                               cmd_queue=cmd_queue,callback_queue=callback_queue)
     # gov_engine.start()
     app.state.governor_engine = Governor(control_queue=control_queue,
                                          cmd_queue=cmd_queue,

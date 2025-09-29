@@ -15,10 +15,12 @@ class RKLLM_Engine:
 
     def __init__(self, engine_params: EngineParams,
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
-                 control_queue: multiprocessing.Queue):
+                 control_queue: multiprocessing.Queue,
+                 callback_queue: multiprocessing.Queue):
         self.cmd_queue = cmd_queue
         self.control_queue = control_queue
         self.engine_params = engine_params
+        self.callback_queue = callback_queue
         pass
 
     def worker_func(self):
@@ -46,6 +48,7 @@ class RKLLM_Engine:
                         self.engine.run(**cmd.params)
                     case "abort_job":
                         if self.engine.is_running(**cmd.params):
+                            self.callback_queue.put(1)
                             _res = self.engine.abort_job(**cmd.params)
                         else:
                             _res = -1

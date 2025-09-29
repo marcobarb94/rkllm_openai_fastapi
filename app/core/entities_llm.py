@@ -177,6 +177,37 @@ class RKLLMPerfStat(ctypes.Structure):
         ('memory_usage_mb', ctypes.c_float),  # float
     ]
 
+    def __repr__(self):
+        return f"RAM: {self.memory_usage_mb:.0f} MB P: {self.prefill_time_ms:.0f} ms G: {self.generate_time_ms:.0f} ms - {self.prefill_tokens} + {self.generate_tokens} tk = {1000*self.prefill_tokens/(self.prefill_time_ms+0.1):.2f} + {1000*self.generate_tokens/(self.generate_time_ms+0.1):.2f} tk/s"
+
+    def openai_usage(self) -> Dict[str, str | int | float]:
+        # https://github.com/open-webui/open-webui/blob/4d7fddaf7e434bf59fdd879ef11d712a503b7863/backend/open_webui/utils/response.py#L28
+        return {
+            "prompt_tokens":
+            self.prefill_tokens,
+            "completion_tokens":
+            self.generate_tokens,
+            "total_tokens":
+            self.prefill_tokens + self.generate_tokens,
+            "memory_usage_MB":
+            self.memory_usage_mb,
+            "prompt_eval":
+            self.prefill_tokens,
+            "eval_count":
+            self.generate_tokens,
+            "prompt_eval_duration":
+            self.prefill_time_ms,
+            "eval_duration":
+            self.generate_time_ms,
+            "prompt_token/s":
+            1000 * self.prefill_tokens / (self.prefill_time_ms + 0.1),
+            "response_token/s":
+            1000 * self.generate_tokens / (self.generate_time_ms + 0.1),
+            "total_duration": (self.prefill_time_ms + self.generate_time_ms),
+            "load_duration":
+            self.prefill_time_ms
+        }
+
 
 class RKLLMResult(ctypes.Structure):
     _fields_ = [("text", ctypes.c_char_p), ("token_id", ctypes.c_int),
@@ -185,7 +216,7 @@ class RKLLMResult(ctypes.Structure):
 
 
 class UserdataCallback(ctypes.Structure):
-    _fields_ = [("id", ctypes.c_int)]
+    _fields_ = [("id", ctypes.c_int)]  #, ("queue_n", ctypes.c_int)]
 
 
 # TODO: rkllm_clear_kv_cache e rkllm_get_kv_cache_size e rkllm_set_function_tools e rkllm_set_cross_attn_params
@@ -218,6 +249,3 @@ class LLMParams(BaseModel):
 class EngineComunication(BaseModel):
     function_name: Literal["run", "abort_job", "is_running"]
     params: Dict[str, Any]
-
-
-

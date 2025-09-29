@@ -1,3 +1,4 @@
+import contextlib
 import ctypes
 import multiprocessing
 import sys
@@ -7,7 +8,7 @@ import logging
 
 from typing import Any, Collection, Literal, Optional, Tuple
 
-from core.util import EmbeddingsLLMData
+from core.util import EmbeddingsLLMData, QueueResult
 from core.entities_llm import *
 
 # nm -D rkllm_server/lib/librkllmrt.so
@@ -33,7 +34,7 @@ from core.entities_llm import *
 
 # Define the structures from the library
 RKLLM_Handle_t = ctypes.c_void_p
-userdata = ctypes.c_void_p(None)
+# userdata = ctypes.c_void_p(None)
 
 # Create a lock to control multi-user access to the server.
 lock = threading.Lock()
@@ -46,6 +47,8 @@ result_queue = multiprocessing.Queue()
 control_queue = multiprocessing.Queue()
 cmd_queue: 'multiprocessing.Queue[EngineComunication]' = multiprocessing.Queue(
 )
+callback_queue = multiprocessing.Queue()
+
 global_state = -1
 split_byte_data = bytes(b"")  # Used to store the segmented byte data
 
@@ -62,14 +65,16 @@ def pointer_to_pyth_float(
 
 
 # Define the callback function
-def callback_impl(result, userdata, state):
-    global result_queue, global_state
+def callback_impl(result: RKLLMResult, userdata_ptr: ctypes.POINTER, state: LLMCallState):
+    userdata = ctypes.cast(userdata_ptr, ctypes.POINTER(UserdataCallback)).contents
+    global result_queue, global_state, callback_queue
     if state == LLMCallState.RKLLM_RUN_FINISH:
         global_state = state
-        result_queue.put(True)
+        result_queue.put(
+            QueueResult(queue_id=userdata.id, payload=result.contents.perf))
     elif state == LLMCallState.RKLLM_RUN_ERROR:
         global_state = state
-        result_queue.put(False)
+        result_queue.put(QueueResult(queue_id=userdata.id, payload=False))
         logging.error("run error")
     elif state == LLMCallState.RKLLM_RUN_NORMAL:
         global_state = state
@@ -86,20 +91,33 @@ def callback_impl(result, userdata, state):
                 len_data=last_hidden_layer_res.embd_size *
                 last_hidden_layer_res.num_tokens)
             result_queue.put(
-                EmbeddingsLLMData(
-                    emb_vocab_size=last_hidden_layer_res.embd_size,
-                    hidden_layer=float_array))
+                QueueResult(queue_id=userdata.id,
+                            payload=EmbeddingsLLMData(
+                                emb_vocab_size=last_hidden_layer_res.embd_size,
+                                hidden_layer=float_array)))
         elif logits_res.vocab_size != 0 and logits_res.num_tokens != 0:
             float_array = pointer_to_pyth_float(
                 pointer=logits_res.logits,
                 len_data=logits_res.vocab_size * logits_res.num_tokens)
             result_queue.put(
-                EmbeddingsLLMData(logits=float_array,
-                                  emb_vocab_size=logits_res.vocab_size))
+                QueueResult(queue_id=userdata.id,
+                            payload=EmbeddingsLLMData(
+                                logits=float_array,
+                                emb_vocab_size=logits_res.vocab_size)))
             print(result.contents.text.decode('utf-8'))
         else:
             _data = result.contents.text
-            result_queue.put("" if _data is None else _data.decode('utf-8'))
+            result_queue.put(
+                QueueResult(
+                    queue_id=userdata.id,
+                    payload=("" if _data is None else _data.decode('utf-8'))))
+
+    _get = None
+    with contextlib.suppress(queue.Empty):
+        _get = callback_queue.get(block=False)
+
+    if _get is not None:
+        return _get
 
 
 # Connect the callback function between the Python side and the C++ side
@@ -141,7 +159,7 @@ class RKLLM(object):
 
         if llm_params is None:
             llm_params = LLMParams()
-        elif isinstance(llm_params,dict):
+        elif isinstance(llm_params, dict):
             llm_params = LLMParams.model_validate(llm_params)
         rkllm_param.model_path = bytes(model_path, 'utf-8')
 
@@ -188,7 +206,8 @@ class RKLLM(object):
         self.f_rkllm_run.argtypes = [
             RKLLM_Handle_t,
             ctypes.POINTER(RKLLMInput),
-            ctypes.POINTER(RKLLMInferParam), ctypes.c_void_p
+            ctypes.POINTER(RKLLMInferParam),
+            ctypes.POINTER(UserdataCallback)
         ]
         self.f_rkllm_run.restype = ctypes.c_int
 
@@ -299,13 +318,13 @@ class RKLLM(object):
                 self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER
             case "logit":
                 self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LOGITS
-        if userdata:
-            ctypes.memset(ctypes.byref(userdata), 0,
-                          ctypes.sizeof(UserdataCallback))
+        # if userdata:
+        #     ctypes.memset(ctypes.byref(userdata), 0,
+        #                   ctypes.sizeof(UserdataCallback))
 
         self.f_rkllm_run(self.handle, ctypes.byref(rkllm_input),
                          ctypes.byref(self.rkllm_infer_params),
-                         userdata if userdata else None)
+                         ctypes.byref(userdata) if userdata else None)
         return
 
     def release(self):
@@ -316,7 +335,7 @@ class RKLLM(object):
 
     def is_running(self) -> bool:
         # status code (0 if a task is running, non-zero for otherwise).
-        return self.f_rkllm_is_running(self.handle) == 0
+        return self.f_rkllm_is_running(self.handle) != 0
 
     def __del__(self) -> None:
         self.abort_job()

@@ -9,13 +9,13 @@ from queue import Empty
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from asyncio import Lock
 from core.entities_api import EngineParams
-from core.entities_llm import EngineComunication
+from core.entities_llm import EngineComunication, RKLLMPerfStat, UserdataCallback
 from functools import lru_cache
 
 from pydantic import BaseModel
 from core.entities_llm import EngineComunication
 from core.process import RKLLM_Engine
-from core.util import EmbeddingsLLMData, num_tokens_from_string
+from core.util import EmbeddingsLLMData, QueueResult, num_tokens_from_string
 
 from contextlib import asynccontextmanager
 
@@ -34,6 +34,7 @@ class GovernorShell():
     process: Optional[Process]
     control_queue: multiprocessing.Queue
     cmd_queue: 'multiprocessing.Queue[EngineComunication]'
+    callback_queue: multiprocessing.Queue
 
     model_collection: List[EngineParams]
     _lock: asyncio.Lock
@@ -41,10 +42,12 @@ class GovernorShell():
 
     def __init__(self, model_collection: List[EngineParams],
                  cmd_queue: 'multiprocessing.Queue[EngineComunication]',
-                 control_queue: multiprocessing.Queue):
+                 control_queue: multiprocessing.Queue,
+                 callback_queue: multiprocessing.Queue):
         self.cmd_queue = cmd_queue
         self.control_queue = control_queue
         self.model_collection = model_collection
+        self.callback_queue = callback_queue
         self.process = None
         self.shutdown_thread = None
         self._lock = asyncio.Lock()
@@ -70,7 +73,8 @@ class GovernorShell():
 
             self.engine = RKLLM_Engine(_dict_params,
                                        control_queue=self.control_queue,
-                                       cmd_queue=self.cmd_queue)
+                                       cmd_queue=self.cmd_queue,
+                                       callback_queue=self.callback_queue)
 
             self.process = Process(target=self.engine.worker_func)
             self.process.start()
@@ -137,9 +141,11 @@ class Governor:
         self.governor_engine = governor_engine
         self.last_run = datetime.datetime.now()
 
-    async def stream_generate(
-            self, prompt: str,
-            model_name: str) -> AsyncGenerator[str | int, str | int]:
+    async def stream_generate(self,
+                              prompt: str,
+                              model_name: str,
+                              _id: Optional[int] = None
+                              ) -> AsyncGenerator[QueueResult, QueueResult]:
         # bloccante fino a quando non sono finiti i job
 
         model_id, enable_thinking, _ = self.governor_engine.get_model_id(  # type: ignore
@@ -151,7 +157,11 @@ class Governor:
             await self.governor_engine.start(model_id)
             logging.info('engine start')
 
-            self.last_run = datetime.datetime.now()
+            _now = datetime.datetime.now()
+
+            self.last_run = _now
+            if _id is None:
+                _id = int(_now.timestamp())
 
             try:
                 self.cmd_queue.put(
@@ -165,26 +175,30 @@ class Governor:
                         break
                 self.result_queue._reset()
                 self.cmd_queue.put(
-                    EngineComunication(function_name="run",
-                                       params={
-                                           "infer_type": "generate",
-                                           "prompt": prompt,
-                                           "enable_thinking": enable_thinking
-                                       }))
+                    EngineComunication(
+                        function_name="run",
+                        params={
+                            "infer_type": "generate",
+                            "prompt": prompt,
+                            "enable_thinking": enable_thinking,
+                            "userdata": UserdataCallback(id=_id)  #, queue_n=0)
+                        }))
                 model_thread_finished = False
                 completion_tokens = 0
-                yield ""
+                # yield ""
                 while not model_thread_finished and self.governor_engine.is_on:
                     await sleep(0.005)
                     while not self.result_queue.empty():
-                        new_text = await to_thread(self.result_queue.get,
-                                                   timeout=30)
+                        new_text: QueueResult = await to_thread(
+                            self.result_queue.get, timeout=30)
                         if new_text is None:
                             break
-                        if type(new_text) is bool:
+                        if type(new_text.payload) is RKLLMPerfStat:
                             model_thread_finished = True
-                            continue
-                        completion_tokens += num_tokens_from_string(new_text)
+                            logging.info(new_text.payload)
+                            yield new_text
+                            break
+                        # completion_tokens += num_tokens_from_string(new_text)
                         yield new_text
                 yield completion_tokens
             except GeneratorExit:

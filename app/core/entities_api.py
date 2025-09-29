@@ -159,6 +159,8 @@ class ChatCompletionChunk(BaseModel):
         ..., description="Modello utilizzato per generare la risposta")
     choices: List[ChatStreamChoice] = Field(
         ..., description="Lista dei chunk parziali generati")
+    usage: Optional[ChatUsage] = Field(
+        None, description="Dati sull'utilizzo dei token della risposta")
 
 
 class OpenAIErrorDetail(BaseModel):
@@ -219,7 +221,7 @@ class EngineParams(BaseModel):
                                      AfterValidator(path_validate)] = Field(
                                          exclude=True)
     model_path: Annotated[str, AfterValidator(path_validate)]
-    name: Optional[str] = Field (None)
+    name: Optional[str] = Field(None)
     llm_params: Dict[str, Any]
     # pydantic private attribute to indicate if the model has thinking capability
     has_thinking: bool = Field(True, exclude=True)
@@ -246,8 +248,7 @@ class EngineParams(BaseModel):
         :return: name + is_thinking
         :rtype: List[Tuple[str, bool]]
         """
-        return [(f"{th}{self.name}",
-                 th == "think-")
+        return [(f"{th}{self.name}", th == "think-")
                 for th in (("std-", "think-") if self.has_thinking else ("", ))
                 ]
 

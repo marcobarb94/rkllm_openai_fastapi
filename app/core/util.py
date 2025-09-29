@@ -1,5 +1,5 @@
 import logging
-from typing import Collection, List, Literal, Optional, Self
+from typing import Any, Collection, List, Literal, Optional, Self
 import tiktoken
 from jinja2 import Template
 import json
@@ -18,7 +18,8 @@ def raise_exception(nome):
 
 
 def parse_message_to_prompt(messages: List[str],
-                            tokenizer_config: dict, enable_thinking: bool = False) -> str:
+                            tokenizer_config: dict,
+                            enable_thinking: bool = False) -> str:
 
     ct = tokenizer_config['chat_template']
     template = Template(ct)
@@ -53,3 +54,12 @@ class EmbeddingsLLMData:
         if other.hidden_layer is not None:
             self.hidden_layer = other.hidden_layer
             self.token_size = other.token_size
+
+
+class QueueResult:
+    queue_id: int
+    payload: Optional[EmbeddingsLLMData | str | bool | Any] = None
+
+    def __init__(self, queue_id: int, payload: EmbeddingsLLMData | str):
+        self.queue_id = queue_id
+        self.payload = payload
