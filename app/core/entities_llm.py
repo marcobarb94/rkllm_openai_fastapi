@@ -2,6 +2,8 @@ import ctypes
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel
 
+from core.entities_api import ChatUsage, Timings
+
 LLMCallState = ctypes.c_int
 LLMCallState.RKLLM_RUN_NORMAL = 0
 LLMCallState.RKLLM_RUN_WAITING = 1
@@ -207,7 +209,11 @@ class RKLLMPerfStat(ctypes.Structure):
             "load_duration":
             self.prefill_time_ms
         }
-
+    def openai_usage_timings(self) -> Dict[str, ChatUsage | Timings]:
+        _out = {}
+        _out["usage"] = ChatUsage(prompt_tokens=self.prefill_tokens,completion_tokens=self.generate_tokens)
+        _out["timings"] = Timings(prompt_n=self.prefill_tokens,prompt_ms=self.prefill_time_ms,predicted_n=self.generate_tokens,predicted_ms=self.generate_time_ms)
+        return _out
 
 class RKLLMResult(ctypes.Structure):
     _fields_ = [("text", ctypes.c_char_p), ("token_id", ctypes.c_int),

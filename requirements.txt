@@ -2,3 +2,4 @@ fastapi
 uvicorn
 tiktoken
 jinja2
+numpy
